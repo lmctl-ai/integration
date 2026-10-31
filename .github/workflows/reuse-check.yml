@@ -1,0 +1,40 @@
+name: reuse-check
+
+# Proves the two reuse paths other repos will use: the reusable workflow (workflow_call) and the action referenced
+# the way a foreign repo references it (owner/repo/path@sha, not ./path). Manual and on workflow changes only.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/e2e.yml"
+      - ".github/workflows/reuse-check.yml"
+      - "actions/**"
+
+permissions:
+  contents: read
+
+jobs:
+  reusable-workflow:
+    uses: ./.github/workflows/e2e.yml
+    with:
+      integration-ref: ${{ github.sha }}
+      lmctl: latest
+      lmmock: pinned
+
+  remote-style-action:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - id: setup
+        uses: lmctl-ai/integration/actions/setup@ddf480726adf8135b8ec34a5c909a991c206e31f
+        with:
+          lmctl: latest
+          tools: lmmock@v0.1.30
+      - run: |
+          test -n "${{ steps.setup.outputs.lmctl-version }}"
+          lmctl --version
+          lmmock --version
+          lmmock --version | grep -q 0.1.30

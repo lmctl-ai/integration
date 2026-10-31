@@ -47,7 +47,7 @@ jobs:
       miniplayer: ${{ steps.plan.outputs.miniplayer }}
       node: ${{ steps.plan.outputs.node }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: lmctl-ai/integration
           ref: ${{ inputs.integration-ref || github.sha }}
@@ -63,7 +63,7 @@ jobs:
     timeout-minutes: 10
     needs: plan
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: lmctl-ai/integration
           ref: ${{ inputs.integration-ref || github.sha }}
@@ -78,11 +78,11 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: lmctl-ai/integration
           ref: ${{ inputs.integration-ref || github.sha }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ needs.plan.outputs.node }}
       - id: setup
