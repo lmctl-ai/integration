@@ -106,3 +106,21 @@ jobs:
         run: bash scripts/run-scenario.sh scenarios/t1-lmmock-ai
       - name: Failing controls
         run: bash tests/scenario-controls.sh
+
+  # One stable check name for the PR gate: red unless the selftest and every scenario leg are green.
+  # Mark `gate` as the required status check of the main ruleset once the operator wants merges blocked.
+  gate:
+    name: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    if: ${{ always() }}
+    needs: [plan, selftest, scenarios]
+    steps:
+      - name: Require green jobs
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS"
+          bad=$(echo "$RESULTS" | node -e 'const n=JSON.parse(require("fs").readFileSync(0,"utf8"));console.log(Object.entries(n).filter(([,v])=>v.result!=="success").map(([k,v])=>k+"="+v.result).join(" "))')
+          if [ -n "$bad" ]; then echo "::error::gate is red: $bad"; exit 1; fi
+          echo "gate green"
