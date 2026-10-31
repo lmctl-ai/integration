@@ -2,7 +2,7 @@
   "scriptContains": {
     "fail me": { "error": "mock provider exploded" },
     "empty please": "",
-    "ping": "pong",
+    "ping": "pang",
     "slow": { "text": "late", "delayMs": 300 }
   }
 }
