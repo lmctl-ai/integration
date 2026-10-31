@@ -137,7 +137,8 @@
       "id": "live-price-route-contract",
       "kind": "node",
       "file": "live-price-route-contract.mjs",
-      "usesLmctl": true
+      "usesLmctl": false,
+      "control": "Pure resolver module fixture; it does not invoke the lmctl executable."
     },
     {
       "id": "miniplayer-mock",
@@ -213,10 +214,11 @@
       "id": "models-validity-process",
       "kind": "node-test",
       "file": "models-validity-process.test.mjs",
-      "usesLmctl": true,
+      "usesLmctl": false,
       "skipTests": [
         "periodic step preserves login HOME"
-      ]
+      ],
+      "control": "Periodic-process lifecycle assertions use local stub executables; they do not exercise the installed lmctl binary."
     },
     {
       "id": "provider-smoke-ratelimit",

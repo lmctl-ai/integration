@@ -103,7 +103,15 @@ const runOne = (suite) => new Promise((resolve) => {
   child.stdout.on('data', (d) => { output += d; });
   child.stderr.on('data', (d) => { output += d; });
   child.on('error', (e) => resolve({ suite, code: 127, output: `FAIL cannot start: ${e.message}`, lines: [`FAIL cannot start: ${e.message}`] }));
-  child.on('close', (code) => resolve({ suite, code: code ?? 1, output, lines: failureLines(output) }));
+  child.on('close', (code) => {
+    const actualCode = code ?? 1;
+    if (control === 'broken-bin' && suite.kind === 'lmctl-script' && actualCode === 0 && output.trim() === '') {
+      const failure = 'FAIL lmctl script runner returned 0 without executing its assertions';
+      resolve({ suite, code: 1, output: failure, lines: [failure] });
+      return;
+    }
+    resolve({ suite, code: actualCode, output, lines: failureLines(output) });
+  });
 });
 
 const classify = (r) => {
