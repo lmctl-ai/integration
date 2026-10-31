@@ -204,8 +204,7 @@
       "id": "models-validity-inconclusive",
       "kind": "node-test",
       "file": "models-validity-inconclusive.test.mjs",
-      "usesLmctl": false,
-      "control": "pure-suite mutation",
+      "usesLmctl": true,
       "skipTests": [
         "real built package API"
       ]
@@ -214,8 +213,7 @@
       "id": "models-validity-process",
       "kind": "node-test",
       "file": "models-validity-process.test.mjs",
-      "usesLmctl": false,
-      "control": "pure-suite mutation",
+      "usesLmctl": true,
       "skipTests": [
         "periodic step preserves login HOME"
       ]
@@ -251,15 +249,13 @@
       "id": "required-lmctl-bin",
       "kind": "node-test",
       "file": "required-lmctl-bin.test.mjs",
-      "usesLmctl": false,
-      "control": "pure-suite mutation"
+      "usesLmctl": true
     },
     {
       "id": "live-quota",
       "kind": "node-test",
       "file": "live-quota.test.mjs",
-      "usesLmctl": false,
-      "control": "pure-suite mutation"
+      "usesLmctl": true
     }
   ]
 }

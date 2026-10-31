@@ -37,3 +37,7 @@ patch schema-import.lms "s#\"PATH=$node_re\"#\"PATH=\" + env(\"NODE_DIR\", \"/us
 patch schema-import.lms "s#env PATH=\\.:$node_re \" \\+ LMSCRIPT_BIN#env PATH=.:\" + env(\"NODE_DIR\", \"/usr/bin\") + \" \" + LMSCRIPT_BIN#"
 patch native-git.lms "s#\"  env: \\{PATH: '$node_re', HOME: '/tmp'\\},\\\\n\" \\+#\"  env: {PATH: '\" + env(\"NODE_DIR\", \"/usr/bin\") + \"', HOME: '/tmp'},\\\\n\" +#"
 echo "patched node paths (NODE_BIN / NODE_DIR from the environment)"
+# failure-detection.mjs also injects a fault into doc-examples.lms, which needs the language docs of a mono source checkout
+# (skip-host); that pair is dropped so the controls after it still run.
+patch failure-detection.mjs "s#, \\['doc-examples', 'IT_MUTATE_DOC_EXAMPLES'\\]##"
+echo "patched failure-detection (doc-examples control dropped)"

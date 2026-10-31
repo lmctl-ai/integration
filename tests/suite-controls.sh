@@ -9,7 +9,8 @@ fails=0
 ok() { echo "PASS $1"; }
 bad() { echo "FAIL $1"; fails=$((fails + 1)); }
 tmp=$(mktemp -d)
-export LMCTL_BIN=$(command -v true)
+printf '#!/bin/sh\necho "lmctl 0.0.0-dummy"\n' > "$tmp/lmctl-dummy"; chmod +x "$tmp/lmctl-dummy"
+export LMCTL_BIN="$tmp/lmctl-dummy"
 
 fresh() { rm -rf "$tmp/m"; mkdir -p "$tmp/m"; cp -R "$src/." "$tmp/m/"; }
 

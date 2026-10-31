@@ -31,7 +31,7 @@ live-quota-controls.mjs	ported	quota-skip controls
 live-quota.test.mjs	ported	quota skip rules with fake providers
 live-service-controls.mjs	ported	quota-skip behaviour including the agy 3p bucket rule
 live-service-support.mjs	support	helper of live-service-controls
-live.lms	skip-live	one tiny prompt per eligible real provider
+live.lms	support	live tier script; exercised with fake providers and fake quota readings by live-quota.test.mjs (never run live here)
 lmplayer-live.mjs	skip-live	needs lmplayer and OLLAMA_API_KEY
 lmscript-diagnostic-cases.lms	ported	wrapper of lmscript-diagnostic-cases.mjs
 lmscript-diagnostic-cases.mjs	ported	import-as guidance, expand, split_regex diagnostics
@@ -60,14 +60,14 @@ observe-expectation-contract.mjs	ported	fabricated session observations through 
 observe-expectation.test.lms	support	self-asserting contract run by observe-expectation-contract
 offline-commands.mjs	ported	offline command coverage (1400 lines)
 offline-session-commands.mjs	ported	tail, export, cost, terminal --size on a scratch HOME
-pref-overlay-live.mjs	skip-live	pref overlay across both frontends with live models
+pref-overlay-live.mjs	support	live tier script; failure-detection.mjs runs it with --mock and an injected fault (never live here)
 pref-overlay.lms	ported	pref overlay with a mock base provider
 prohibitions.lms	skip-live	downloads the live model catalog from lmctl.com and reads durable-memory sample data (network, drifts)
 prompt-heartbeat-fixture.py	support	fixture of prompt-heartbeat.lms
 prompt-heartbeat.lms	ported	prompt heartbeat with a fake provider
 prompt-precondition.lms	support	used by prompt-precondition.test.mjs
 prompt-precondition.test.mjs	ported	prompt preconditions
-prompt.lms	skip-live	CLI versus host functions with live prompts
+prompt.lms	support	live tier script; exercised with fake providers by required-lmctl-bin.test.mjs and live-quota.test.mjs (never run live here)
 provider-commands-known.json	skip-live	known failures of the live command matrix
 provider-commands.mjs	skip-live	live command matrix on real provider sessions (about 50 minutes)
 provider-smoke-ratelimit-controls.mjs	support	mutation controls of provider-smoke-ratelimit

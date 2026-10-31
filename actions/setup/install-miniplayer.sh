@@ -25,5 +25,8 @@ mkdir -p "$bin"
 printf '#!/usr/bin/env bash\nexec node "%s/bin/miniplayer.js" "$@"\n' "$src" > "$bin/miniplayer"
 chmod +x "$bin/miniplayer"
 add_path "$bin"
+# Suites that want the JS entry itself (mono-test miniplayer-tools) read this.
+if [ -n "${GITHUB_ENV:-}" ]; then echo "INTEGRATION_MINIPLAYER_JS=$src/bin/miniplayer.js" >> "$GITHUB_ENV"; fi
+set_output miniplayer-js "$src/bin/miniplayer.js"
 note "miniplayer commit=$ref (built from source, no release exists)"
 set_output miniplayer-version "$ref"

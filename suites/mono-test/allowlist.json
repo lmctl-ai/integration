@@ -42,6 +42,41 @@
     "expires": "2026-11-14"
   },
   {
+    "suite": "offline-commands",
+    "match": "FAIL B9 rate-limited (403) with a cold cache",
+    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
+    "owner": "lmcode-team Lead (release pipeline)",
+    "expires": "2026-11-14"
+  },
+  {
+    "suite": "offline-commands",
+    "match": "FAIL B8 rate-limited (403) newest-release check",
+    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
+    "owner": "lmcode-team Lead (release pipeline)",
+    "expires": "2026-11-14"
+  },
+  {
+    "suite": "offline-commands",
+    "match": "FAIL B7 @latest within the check TTL",
+    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
+    "owner": "lmcode-team Lead (release pipeline)",
+    "expires": "2026-11-14"
+  },
+  {
+    "suite": "offline-commands",
+    "match": "FAIL C5 --check of the pinned install script",
+    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
+    "owner": "lmcode-team Lead (release pipeline)",
+    "expires": "2026-11-14"
+  },
+  {
+    "suite": "offline-commands",
+    "match": "FAIL C4 --check and --lint of an @latest",
+    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
+    "owner": "lmcode-team Lead (release pipeline)",
+    "expires": "2026-11-14"
+  },
+  {
     "suite": "native-git",
     "match": "real run with import evaluates native-git: evaluated=false",
     "reason": "the native-git suite reports one differential finding on published 0.2.448 (a real run with import: evaluated=false); mono-test targets current main. Not yet analysed which side is right; the release-pipeline design says native-git is being removed, which would retire the suite.",
@@ -49,9 +84,23 @@
     "expires": "2026-11-14"
   },
   {
-    "suite": "failure-detection",
-    "match": "language docs missing",
-    "reason": "failure-detection.mjs includes a control that runs doc-examples.lms, which needs the lmscript language docs of a mono source checkout; the npm package ships none (doc-examples is classified skip-host). The control for every other suite runs.",
+    "suite": "command-coverage",
+    "match": "an advertised command lacks an executing test and an allowlist reason",
+    "reason": "the published CLI advertises status and ratelimit; their executing cases live in read.lms (skip-host: reads the operator's teamfile and live ratelimit readings) and are not ported. The upstream command-coverage-allowlist.json is intentionally not edited.",
+    "owner": "lmcode-team Lead (release pipeline)",
+    "expires": "2026-11-14"
+  },
+  {
+    "suite": "miniplayer-mock",
+    "match": "does not support session resume",
+    "reason": "skew between the mono-test expectation and miniplayer at the pinned commit dad4589 (versions.lock): session/load without cwd answers 'cwd must be an absolute directory path' instead of 'does not support session resume'. Needs the miniplayer owner or an updated mono-test.",
+    "owner": "lmcode-team Lead (release pipeline)",
+    "expires": "2026-11-14"
+  },
+  {
+    "suite": "feature-case-controls",
+    "match": "language-git survived",
+    "reason": "the broken-output control of the lmscript-language-cases git case does not reject its mutation on published 0.2.448 (the case locates the shipped modules/git.lms next to the lmscript launcher; the product moved git to native:git). Not analysed which side is stale; later controls of this file do not run after it.",
     "owner": "lmcode-team Lead (release pipeline)",
     "expires": "2026-11-14"
   }

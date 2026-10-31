@@ -1,0 +1,241 @@
+# Real quota: one tiny anonymous call per eligible fleet provider, never retried.
+# Run from this repository: lmctl script tests/live.lms
+import "lib.lms";
+RESULTS = [];
+quota = lm_ratelimit_readings();
+if (get(quota, "status", null) != "ok") {
+  print("WARN preflight: rate-limit preflight unreadable (" + str(get(quota, "error", "status not ok")) + "); proceeding");
+  quota = {status: "unreadable", readings: []};
+}
+
+models = {};
+agy_model = env("LMCTL_LIVE_AGY_MODEL", "Gemini 3.8 Flash (Medium)");
+codex_model = env("LMCTL_LIVE_CODEX_MODEL", "gpt-6-luna");
+lmplayer_model = env("LMCTL_LIVE_LMPLAYER_MODEL", "ollama-cloud/deepseek-v4.1-flash");
+# Providers and models normally come from live-config.json via live-config.mjs (LMCTL_LIVE_PROVIDERS and
+# LMCTL_LIVE_<ID>_MODEL); the defaults above only apply when this file is run by hand.
+
+live_providers_env = env("LMCTL_LIVE_PROVIDERS", "codex,agy");
+raw_providers = split(live_providers_env, ",");
+providers = [];
+p_idx = 0;
+while (p_idx < len(raw_providers)) {
+  p_name = trim(raw_providers[p_idx]);
+  if (len(p_name) > 0) { push(providers, p_name); }
+  p_idx = p_idx + 1;
+}
+providers = sort(providers);
+
+p_i = 0;
+while (p_i < len(providers)) {
+  p_name = providers[p_i];
+  p_models = {};
+  if (p_name == "agy") {
+    set(p_models, [agy_model], 1);
+  } else if (p_name == "codex") {
+    set(p_models, [codex_model], 1);
+  } else if (p_name == "lmplayer") {
+    set(p_models, [lmplayer_model], 1);
+  }
+  set(models, [p_name], p_models);
+  p_i = p_i + 1;
+}
+checks = json_parse(cli(["node", "tests/live-probe.mjs", "preflight", json_stringify(providers)]).stdout);
+root = trim(cli(["mktemp", "-d", "/tmp/lmctl-live-XXXXXX"]).stdout);
+print("Isolated session directory: " + root);
+print("Scope: " + join(providers, ", ") + "; one call each, no retries.");
+attempted = 0; completed = 0; skipped = 0; unknown = 0; core_ran = 0;
+
+i = 0;
+while (i < len(providers)) {
+  provider = providers[i];
+  check = find_by(checks, "provider", provider);
+  fail_reason = null;
+  if (!check.found) { fail_reason = "binary unavailable: " + str(get(check, "failureMode", null)); }
+  if (fail_reason != null) {
+    print("FAIL " + provider + ": " + fail_reason);
+    record(RESULTS, provider + " available and eligible", false, fail_reason);
+    lm_error("provider " + provider + " unavailable: " + fail_reason);
+  }
+
+  reading = find_by(get(quota, "readings", []), "provider", provider);
+  unreadable_reason = null;
+  exhausted_reason = null;
+
+  if (reading == null && contains(["agy", "claude", "codex", "kimi"], provider)) {
+    unreadable_reason = "expected quota reading missing";
+  }
+
+  if (reading != null) {
+    # Refresh just before spending: earlier providers can take minutes.
+    fresh = lm_ratelimit_readings({provider: provider});
+
+    if (get(fresh, "status", null) != "ok") {
+      unreadable_reason = "quota refresh failed";
+    } else {
+      reading = find_by(get(fresh, "readings", []), "provider", provider);
+    }
+
+    if (reading == null || get(reading, "status", null) != "ok") {
+      r_reason = str(get(reading, "reason", ""));
+      r_detail = str(get(reading, "detail", ""));
+      if (contains(r_reason, "exhaust") || contains(r_reason, "too many requests") ||
+          contains(r_reason, "rate limit") || contains(r_reason, "usage limit") ||
+          contains(r_reason, "429") || contains(r_detail, "exhaust") ||
+          contains(r_detail, "limit reached")) {
+        exhausted_reason = "quota exhausted: " + r_reason;
+      } else {
+        unreadable_reason = "quota unavailable";
+      }
+    } else {
+      if (get(reading, "ordinary_usage_allowed", null) == false) {
+        exhausted_reason = "ordinary usage disallowed";
+      }
+      if (get(reading, "spend_control.reached", false)) {
+        exhausted_reason = "spend control reached";
+      }
+      if (get(reading, "credits.has_credits", null) == false) {
+        exhausted_reason = "out of usage credits";
+      }
+      buckets = get(reading, "buckets", []);
+      b = 0;
+      while (b < len(buckets)) {
+        bucket = buckets[b];
+        used = get(bucket, "used_fraction", null);
+        # Operator decision 2026-10-07: the agy third-party (3p) bucket is never used by tests, so it never gates.
+        bucket_label = str(get(bucket, "bucket_id", ""));
+        is_agy_3p = provider == "agy" && (starts_with(bucket_label, "3p") || starts_with(bucket_label, "agy-3p"));
+        if (is_agy_3p) {
+          used = null;
+        } else if (get(bucket, "is_exhausted", false) || get(bucket, "limit_reached", false)
+            || get(bucket, "allowed", null) == false || (used != null && used >= 1)) {
+          exhausted_reason = "exhausted/disallowed bucket " + bucket.bucket_id;
+        } else if (provider == "kimi" && bucket.window_type == "weekly" && used != null && used >= 0.95) {
+          exhausted_reason = "protect kimi weekly reserve (>=95% used): " + str(used);
+        }
+        b = b + 1;
+      }
+    }
+  }
+
+  if (exhausted_reason != null) {
+    print("WARN " + provider + ": skipped, " + exhausted_reason);
+    record(RESULTS, provider + " available and eligible", true, "skipped: " + exhausted_reason);
+    skipped = skipped + 1;
+    i = i + 1;
+    continue;
+  }
+
+  if (unreadable_reason != null) {
+    print("WARN " + provider + ": quota unreadable (" + unreadable_reason + "); proceeding, the call itself is the availability check");
+  } else if (reading == null) {
+    print(provider + ": quota telemetry not exposed; availability checked by this one call");
+  }
+  record(RESULTS, provider + " available and eligible", true, "proceeding (availability checked by call)");
+
+  choices = sort(keys(get(models, [provider])));
+  selected = null; best = 0; j = 0;
+  while (j < len(choices)) {
+    count = get(models, [provider, choices[j]]);
+    if (count > best) { selected = choices[j]; best = count; }
+    j = j + 1;
+  }
+  agent = {provider: provider, sessiondir: root};
+  if (selected != null) { agent.model = selected; }
+  print("PROMPT " + provider + " declared=" + json_stringify(selected));
+  attempted = attempted + 1;
+  if (contains(["agy", "codex"], provider)) {
+    core_ran = core_ran + 1;
+  }
+
+  result = lm_agent(agent, "Reply exactly OK. Do not use tools or read or change files.", {idleTimeoutMs: 120000});
+
+  if (result.status != "ok") {
+    classify_cmd = ["node", "tests/live-probe.mjs", "classify", json_stringify({error: str(result.error), provider: provider})];
+    classify_res = cli(classify_cmd);
+    classification = json_parse(classify_res.stdout);
+    if (get(classification, "isRateLimit", false) == true) {
+      print("WARN " + provider + ": prompt rate-limited / quota exhausted: " + str(result.error));
+      record(RESULTS, provider + " tiny prompt reply", true, "rate-limited: " + str(result.error));
+    } else {
+      print("FAIL " + provider + " unreachable on its only attempt: " + str(result.error));
+      record(RESULTS, provider + " tiny prompt reply", false, str(result.error));
+      lm_error("provider " + provider + " unreachable: " + str(result.error));
+    }
+  } else {
+    completed = completed + 1;
+    record(RESULTS, provider + " tiny prompt reply", trim(result.reply) == "OK", result.reply);
+    readback = system(["node", "tests/live-probe.mjs", "observe", json_stringify(agent)], 60000);
+    if (readback.code != 0) {
+      record(RESULTS, provider + " session readback", false, readback.stderr);
+    } else {
+      observed = json_parse(readback.stdout);
+      name = observed.observed;
+      print(provider + " session=" + agent.sessionid + " declared=" + json_stringify(selected)
+            + " observed=" + json_stringify(name) + " scope=session");
+      same(RESULTS, provider + " status preserves declaration", observed.status.model, selected);
+      if (name == null || name == "") {
+        unknown = unknown + 1;
+        print(provider + ": observation=unknown; mapping=unknown (no declared-name fallback)");
+        same(RESULTS, provider + " absent observation labelled unknown", observed.status.observed_model, "(unknown)");
+        same(RESULTS, provider + " unknown has no mapping", observed.resolution, null);
+      } else {
+        same(RESULTS, provider + " status reports native observed name", observed.status.observed_model, name);
+        state = observed.resolution;
+        # Defaults mirror live-config.json's fields so a hand-run (no live-config.mjs
+        # exports) judges lmplayer the same way a config-driven run does; the env
+        # exports always win when present.
+        expected_observed = env("LMCTL_LIVE_" + upper(provider) + "_OBSERVED", "");
+        billing = env("LMCTL_LIVE_" + upper(provider) + "_BILLING", "");
+        if (expected_observed == "") {
+          if (provider == "lmplayer" && selected != null) { expected_observed = regex_replace(selected, "^ollama-cloud/", ""); }
+          else { expected_observed = selected; }
+        }
+        if (billing == "") {
+          if (provider == "lmplayer") { billing = "credit"; }
+          else { billing = "per-token"; }
+        }
+        observe_expectation(RESULTS, provider, selected, name, expected_observed, billing,
+                            state.kind, observed.selected_route, observed.catalog_source, observed.generated_at);
+      }
+    }
+  }
+  i = i + 1;
+}
+
+if (core_ran == 0) {
+  print("FAIL: no core provider (agy or codex) was able to run; all providers skipped or unavailable");
+  record(RESULTS, "at least one core provider ran", false, "0 core providers ran (" + str(skipped) + " skipped)");
+  lm_error("no core provider ran; all providers skipped or unavailable");
+} else {
+  record(RESULTS, "at least one core provider ran", true, str(core_ran) + " core provider(s) ran");
+}
+
+print(format("{0} providers; {1} attempted; {2} completed; {3} skipped; {4} unknown observations",
+             len(providers), attempted, completed, skipped, unknown));
+diff = summary(RESULTS);
+if (unknown == 0) { print("Unknown-observation branch not exercised: every completed session reported a model."); }
+
+# Separate informational DIFF from failing differences explicitly.
+# Declared vs observed model naming differences (e.g. agy declared/observed differ; not assumed equivalent)
+# are findings, not test failures (finding 009), and must remain non-failing.
+failing_diffs = 0;
+j = 0;
+while (j < len(RESULTS)) {
+  r = RESULTS[j];
+  if (!r.ok) {
+    if (contains(r.name, "observed model matches expectation")) {
+      print("INFO finding (non-failing): " + r.name + " -- " + str(r.detail));
+    } else {
+      print("FAIL difference: " + r.name + " -- " + str(r.detail));
+      failing_diffs = failing_diffs + 1;
+    }
+  }
+  j = j + 1;
+}
+
+if (failing_diffs > 0) {
+  print("FAIL: " + str(failing_diffs) + " failing difference(s) detected in live suite");
+  lm_exit(1);
+}
+print("DONE");

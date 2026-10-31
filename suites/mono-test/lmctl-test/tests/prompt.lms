@@ -1,0 +1,128 @@
+import "lib.lms";
+import "prompt-precondition.lms";
+
+RESULTS = [];
+
+ROOT = env("LMCTL_TEST_ROOT", "/home/mma/repos/lmctl-test");
+TEAMFILE = env("LMCTL_TEST_PROMPT_TEAMFILE", "");
+PROMPT_FILE = temp_file();
+
+AGY_ALIAS = "Reviewer3";
+AGY_MODEL = env("LMCTL_LIVE_AGY_MODEL", "Gemini 3.8 Flash (Medium)");
+CODEX_ALIAS = "Reviewer1";
+CODEX_MODEL = env("LMCTL_LIVE_CODEX_MODEL", "gpt-6-luna");
+
+PROVIDERS_ENV = env("LMCTL_LIVE_PROVIDERS", "codex,agy");
+raw_providers = split(PROVIDERS_ENV, ",");
+PROVIDERS = [];
+p_idx = 0;
+while (p_idx < len(raw_providers)) {
+  p_name = trim(raw_providers[p_idx]);
+  if (len(p_name) > 0) { push(PROVIDERS, p_name); }
+  p_idx = p_idx + 1;
+}
+
+# This suite compares the provider's own CLI with lm_prompt/lm_agent, which exists only for codex and agy.
+# Other configured providers (for example lmplayer) are covered by their own live suites.
+NATIVE_COMPARE = [];
+np_idx = 0;
+while (np_idx < len(PROVIDERS)) {
+  if (PROVIDERS[np_idx] == "codex" || PROVIDERS[np_idx] == "agy") { push(NATIVE_COMPARE, PROVIDERS[np_idx]); }
+  else { print("NOTE prompt.lms: no native-CLI comparison for provider " + PROVIDERS[np_idx] + "; not run here"); }
+  np_idx = np_idx + 1;
+}
+PROVIDERS = NATIVE_COMPARE;
+
+# Isolate generated provider rosters: an unavailable Codex model must not
+# prevent an available Agy provider from being seeded and exercised.
+SUPPLIED_TEAMFILE = TEAMFILE;
+TEAMFILES = {};
+READY = [];
+SKIPPED = 0;
+setup_idx = 0;
+while (setup_idx < len(PROVIDERS)) {
+  setup_provider = PROVIDERS[setup_idx];
+  setup_idx = setup_idx + 1;
+  setup_alias = AGY_ALIAS; setup_model = AGY_MODEL;
+  if (setup_provider == "codex") { setup_alias = CODEX_ALIAS; setup_model = CODEX_MODEL; }
+  if (setup_provider != "codex" && setup_provider != "agy") {
+    print("FAIL PRECONDITION UNKNOWN-PROVIDER " + setup_provider); lm_exit(1);
+  }
+  TEAMFILE = SUPPLIED_TEAMFILE;
+  if (len(TEAMFILE) == 0 || !file_exists(TEAMFILE)) {
+    TEAMFILE = ROOT + "/.prompt-live-" + setup_provider + ".lmctl";
+    write_file(TEAMFILE, "_TEAM_ name=prompt-live\n_MEMBER_ alias=" + setup_alias + " provider=" + setup_provider + " model=" + json_stringify(setup_model) + "\n");
+  }
+  TEAMFILES = set(TEAMFILES, setup_provider, TEAMFILE);
+  # Seed supplied files too; never use an alias after failed setup.
+  seed_result = system(["lmctl", "--non-interactive", "seed", TEAMFILE], 300000);
+  seed_output = seed_result.stdout + "\n" + seed_result.stderr;
+  decision = prompt_precondition(seed_result.code, seed_output, setup_provider, setup_model, "");
+  if (decision != "MODEL-UNAVAILABLE") {
+    # lm_member returns the 049 D2 envelope {status, error, member}; the sessionid is on .member.
+    setup_member = lm_member(TEAMFILE, setup_alias);
+    setup_session = "";
+    if (setup_member.status == "ok") { setup_session = getstr(get(setup_member, "member", {}), "sessionid", ""); }
+    decision = prompt_precondition(seed_result.code, seed_output, setup_provider, setup_model, setup_session);
+  }
+  if (decision == "MODEL-UNAVAILABLE") {
+    for (case_name in ["CLI vs lm_prompt", "lm_prompt vs lm_agent", "anonymous did not create a teamfile"]) {
+      print("SKIP MODEL-UNAVAILABLE " + setup_provider + " " + case_name + ": capability provider=" + setup_provider + " model=" + setup_model + " is not supported on this account");
+    }
+    SKIPPED = SKIPPED + 3;
+  } else if (decision != "READY") {
+    print("FAIL PRECONDITION " + decision + " provider=" + setup_provider + " alias=" + setup_alias + " model=" + setup_model + " -- " + seed_output);
+    lm_exit(1);
+  } else {
+    if (seed_result.code != 0) { print("FAIL PRECONDITION SEED-FAILED " + seed_output); lm_exit(1); }
+    push(READY, setup_provider);
+  }
+}
+PROVIDERS = READY;
+
+fn prompt_pair(name, alias, text, host_answer) {
+  write_file(PROMPT_FILE, text);
+  cli_result = cli(["lmctl", "prompt", TEAMFILE + ":" + alias,
+                    "--prompt-file", PROMPT_FILE]);
+  return same(RESULTS, name, trim(cli_result.stdout), host_answer);
+}
+
+fn anonymous_pair(name, provider, model, team_answer, text) {
+  anonymous = { provider: provider, model: model, sessiondir: ROOT };
+  missing_teamfile = ROOT + "/.prompt-anonymous-" + lower(provider) + ".lmctl";
+  if (file_exists(missing_teamfile)) {
+    lm_error("refusing ambiguous anonymous check; file exists: " + missing_teamfile);
+  }
+  anonymous_result = lm_agent(anonymous, text, { idleTimeoutMs: 1800000 });
+  if (anonymous_result.status != "ok") {
+    lm_error(name + " anonymous prompt failed: " + str(anonymous_result.error));
+  }
+  agrees = same(RESULTS, name, team_answer, anonymous_result.reply);
+  no_teamfile = !file_exists(missing_teamfile);
+  record(RESULTS, name + " did not create a teamfile", no_teamfile,
+         "path=" + missing_teamfile);
+  return agrees && no_teamfile;
+}
+
+if (contains(PROVIDERS, "agy")) {
+  TEAMFILE = get(TEAMFILES, "agy", "");
+  agy_text = "Reply with exactly: AGY_PROMPT_OK";
+  agy_team = lm_prompt(TEAMFILE, AGY_ALIAS, agy_text, { idleTimeoutMs: 1800000 });
+  if (agy_team.status != "ok") { lm_error("agy host prompt failed: " + str(agy_team.error)); }
+  prompt_pair("agy CLI vs lm_prompt", AGY_ALIAS, agy_text, agy_team.reply);
+  anonymous_pair("agy lm_prompt vs lm_agent", "agy", AGY_MODEL, agy_team.reply, agy_text);
+}
+
+if (contains(PROVIDERS, "codex")) {
+  TEAMFILE = get(TEAMFILES, "codex", "");
+  codex_text = "Reply with exactly: CODEX_PROMPT_OK";
+  codex_team = lm_prompt(TEAMFILE, CODEX_ALIAS, codex_text, { idleTimeoutMs: 1800000 });
+  if (codex_team.status != "ok") { lm_error("codex host prompt failed: " + str(codex_team.error)); }
+  prompt_pair("codex CLI vs lm_prompt", CODEX_ALIAS, codex_text, codex_team.reply);
+  anonymous_pair("codex lm_prompt vs lm_agent", "codex", CODEX_MODEL, codex_team.reply, codex_text);
+}
+
+differences = summary(RESULTS);
+print("SUMMARY: executed=" + str(len(RESULTS)) + " skipped=" + str(SKIPPED));
+if (differences > 0) { lm_exit(1); }
+print("DONE");

@@ -39,7 +39,7 @@ try {
   const lmscriptBin = process.env.LMSCRIPT_BIN || 'lmscript';
   const realLmscript = lmscriptBin.includes('/') ? lmscriptBin : execFileSync('which', [lmscriptBin], { encoding: 'utf8' }).trim();
 
-  for (const [name, fault] of [['recover-resumepoint', 'IT_MUTATE_RECOVER'], ['doc-examples', 'IT_MUTATE_DOC_EXAMPLES']]) {
+  for (const [name, fault] of [['recover-resumepoint', 'IT_MUTATE_RECOVER']]) {
     const result = spawnSync(real, ['script', `tests/${name}.lms`], {
       cwd: new URL('../', import.meta.url).pathname,
       env: { ...process.env, LMCTL_BIN: real, LMSCRIPT_BIN: realLmscript, [fault]: '1' },

@@ -64,8 +64,13 @@ const nodeBin = process.execPath;
 const pathValue = [path.dirname(lmctlBin), path.dirname(nodeBin), process.env.INTEGRATION_BIN, '/usr/bin', '/bin'].filter(Boolean).join(path.delimiter);
 const testsCwd = path.join(here, 'lmctl-test');
 
-const failureLines = (output) => output.split('\n').map((l) => l.replace(/\r$/, '')).filter((l) =>
-  /^FAIL\b/.test(l) || /^\s*✖ /.test(l) && !/failing tests:/.test(l) || /^\s+- \S/.test(l) || /^not ok\b/.test(l) || /^(Assertion)?Error\b/.test(l));
+// Primary failure lines are FAIL lines, node:test failures and "  - finding" lines. Only when a failing run printed none of them
+// are bare Error/AssertionError lines used, so an assertion that merely echoes a whole report is not mistaken for a new failure.
+const failureLines = (output) => {
+  const lines = output.split('\n').map((l) => l.replace(/\r$/, ''));
+  const primary = lines.filter((l) => /^FAIL\b/.test(l) || /^\s*✖ /.test(l) && !/failing tests:/.test(l) || /^\s+- \S/.test(l) || /^not ok\b/.test(l));
+  return primary.length ? primary : lines.filter((l) => /^(Assertion)?Error\b/.test(l));
+};
 
 const runOne = (suite) => new Promise((resolve) => {
   const work = fs.mkdtempSync(path.join(scratch, `${suite.id}-`));
@@ -82,6 +87,8 @@ const runOne = (suite) => new Promise((resolve) => {
     TMPDIR: work,
     LANG: 'C.UTF-8',
   };
+  // miniplayer-tools wants the JS entry, miniplayer-mock accepts a path or a command (see actions/setup/install-miniplayer.sh).
+  if ((suite.needs || []).includes('miniplayer') && process.env.INTEGRATION_MINIPLAYER_JS) env.MINIPLAYER_BIN = process.env.INTEGRATION_MINIPLAYER_JS;
   let cmd;
   if (suite.kind === 'lmctl-script') cmd = [lmctlBin, 'script', path.join('tests', suite.file)];
   else if (suite.kind === 'node') cmd = [nodeBin, path.join('tests', suite.file)];
