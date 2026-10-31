@@ -22,6 +22,8 @@ workflow waits for them.
   `NAME-windows-x64.exe`) from the release of `lmctl-ai/NAME` and checks it against the release `SHA256SUMS`
   before installing it. Extra assets (for lmmock `examples.tar.gz`) are verified the same way and exported as
   `INTEGRATION_ASSETS_<NAME>`. Only the download is retried (3 attempts); a checksum failure never is.
+- Known quirk: locally (not on a clean runner) miniplayer sometimes answers the T1 prompt with a tool result from
+  lmmock's handler instead of `pong`, so T1 asserts status, a non-empty reply and that the mock saw the request.
 - Not covered yet: Windows runs (scripts are bash and Git-Bash friendly, untested), a second compat compiler
   slot for hosts still on an older bytecode version.
 
@@ -38,6 +40,10 @@ jobs:
       lmctl: latest,staging
       lmmock: pinned,latest
 ```
+
+`reuse-check.yml` (manual, and on changes to the workflow or action) proves both reuse paths: the workflow called as
+a reusable workflow and the action referenced as `lmctl-ai/integration/actions/setup@<sha>` the way another repo would.
+`gh workflow run e2e.yml -f lmctl=9.9.9` is the workflow-level red control (the run fails in `setup` naming the tag).
 
 Jobs: `plan` (matrix from inputs and `versions.lock`), `selftest` (setup scripts with a fake `gh`, plus
 the checksum, tag and pin controls) and `scenarios` (one leg per `{lmctl} x {lmmock}`).
