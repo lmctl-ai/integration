@@ -1,0 +1,95 @@
+# Offline CLI and standalone-runner contracts for recover/resumepoint.
+RESULTS = [];
+FAILURES = 0;
+
+fn check(name, ok, detail) {
+  push(RESULTS, {name:name, ok:ok, detail:detail});
+  if (ok) { print("PASS " + name); }
+  else { print("FAIL " + name + " -- " + detail); }
+  return ok;
+}
+
+fn scratch() {
+  made = system(["mktemp", "-d", "/tmp/lmctl-it-resume-XXXXXX"], 10000);
+  if (made.code != 0) { lm_error("mktemp failed: " + made.stderr); lm_exit(1); }
+  root = trim(made.stdout);
+  home = root + "/home";
+  system(["mkdir", "-p", home + "/.lmctl"], 10000);
+  profile = "[Provider1]\nprovider = \"ClaudeMock\"\nmodel1 = \"first\"\nmodel2 = \"second\"\nmodel3 = \"third\"\n\n"
+          + "[Provider2]\nprovider = \"ClaudeMock\"\nmodel1 = \"first\"\nmodel2 = \"second\"\nmodel3 = \"third\"\n\n"
+          + "[Provider3]\nprovider = \"ClaudeMock\"\nmodel1 = \"first\"\nmodel2 = \"second\"\nmodel3 = \"third\"\n";
+  write_file(home + "/.lmctl/init.toml", profile);
+  return {root:root, home:home};
+}
+
+fn invoke(front, box, file, options, tail) {
+  if (tail == null) { tail = []; }
+  command = [];
+  if (front == "lmctl") { command = [env("LMCTL_BIN", "lmctl"), "script"]; }
+  else { command = [env("LMSCRIPT_BIN", "lmscript")]; }
+  command = concat(command, options, [file], tail);
+  env_command = ["env", "HOME=" + box.home, "LMCTL_HOME=" + box.home + "/.lmctl",
+                 "LMCTL_DB=" + box.root + "/state.db", "LMCTL_NO_UPDATE_NOTIFIER=1",
+                 "LMCTL_NON_INTERACTIVE=1"];
+  return system(concat(env_command, command), 30000);
+}
+
+fn clean(box) {
+  removed = system(["rm", "-rf", box.root], 10000);
+  check("scratch effects cleaned", removed.code == 0 && !file_exists(box.root), "rm exit=" + str(removed.code) + " root_exists=" + str(file_exists(box.root)));
+}
+
+fn exercise(front) {
+  box = scratch();
+  path = box.root + "/normal.lms";
+  write_file(path, "println(\"pre:\" + str(RESUMEPOINT));\nrecover {\n  resumepoint a: println(\"a:\" + str(RESUMEPOINT));\n  resumepoint b: println(\"b:\" + str(RESUMEPOINT));\n  resumepoint c: println(\"c:\" + str(RESUMEPOINT));\n}\nprintln(\"post:\" + str(RESUMEPOINT));\n");
+  result = invoke(front, box, path, [], []);
+  check(front + " normal fallthrough order and RESUMEPOINT", result.code == 0 && result.stdout == "pre:null\na:a\nb:b\nc:c\npost:null\n" && result.stderr == "", "code=" + str(result.code) + " stdout=" + result.stdout + " stderr=" + result.stderr);
+  clean(box);
+
+  box = scratch(); path = box.root + "/failure.lms";
+  write_file(path, "recover {\n  resumepoint a: println(\"a\");\n  resumepoint b: println(\"b\"); require(!contains(ARGV, \"fail\"), \"point b failed\");\n  resumepoint c: println(\"c\");\n}\n");
+  result = invoke(front, box, path, ["--no-preflight"], ["fail"]);
+  failure_ok = result.code != 0 && result.stdout == "a\nb\n" && contains(result.stderr, "point b failed") && contains(result.stderr, "resumepoint: b (rerun with --resumepoint b)");
+  check(front + " failure names source and supplies resumepoint command", failure_ok, "code=" + str(result.code) + " stdout=" + result.stdout + " stderr=" + result.stderr);
+  resumed = invoke(front, box, path, ["--no-preflight", "--resumepoint", "b"], []);
+  check(front + " resume b falls through", resumed.code == 0 && resumed.stdout == "b\nc\n" && resumed.stderr == "", "code=" + str(resumed.code) + " stdout=" + resumed.stdout + " stderr=" + resumed.stderr);
+  clean(box);
+
+  box = scratch(); path = box.root + "/nested.lms";
+  write_file(path, "recover {\n  resumepoint a: println(\"outer:\" + str(RESUMEPOINT)); recover {\n    resumepoint b: println(\"inner:\" + str(RESUMEPOINT));\n    resumepoint c: println(\"last:\" + str(RESUMEPOINT));\n  }\n}\n");
+  result = invoke(front, box, path, ["--resumepoint", "a.b"], []);
+  check(front + " nested a.b path", result.code == 0 && result.stdout == "outer:a\ninner:a.b\nlast:a.c\n" && result.stderr == "", "code=" + str(result.code) + " stdout=" + result.stdout + " stderr=" + result.stderr);
+  clean(box);
+
+  box = scratch(); path = box.root + "/unknown.lms";
+  write_file(path, "recover { resumepoint a: println(\"ran\"); }\n");
+  result = invoke(front, box, path, ["--resumepoint", "missing"], []);
+  check(front + " unknown resumepoint is a static exit 2", result.code == 2 && result.stdout == "" && contains(result.stderr, "Unknown resumepoint 'missing'") && contains(result.stderr, path), "code=" + str(result.code) + " stdout=" + result.stdout + " stderr=" + result.stderr);
+  clean(box);
+
+  box = scratch(); path = box.root + "/warning.lms";
+  write_file(path, "recover {\n  resumepoint a: value = 4;\n  resumepoint b: println(value);\n}\n");
+  result = invoke(front, box, path, ["--check"], []);
+  warning_ok = result.code == 0 && result.stdout == "" && contains(result.stderr, "Variable 'value'") && contains(result.stderr, "read in resumepoint 'b'") && contains(result.stderr, "earlier resumepoint(s): a") && contains(result.stderr, "resuming here may skip initialization");
+  check(front + " check warns for skipped initialization", warning_ok, "code=" + str(result.code) + " stdout=" + result.stdout + " stderr=" + result.stderr);
+  clean(box);
+}
+
+fronts = ["lmctl", "lmscript"];
+front_index = 0;
+while (front_index < len(fronts)) { exercise(fronts[front_index]); front_index = front_index + 1; }
+
+# Comparator control: a deliberately false expected exit must be classified as a failure.
+wrong_actual = {code:0}; wrong_expected_code = 7;
+wrong_comparison = wrong_actual.code == wrong_expected_code;
+wrong_control = check("CONTROL wrong exit expectation", wrong_comparison, "actual code 0 must not equal expected code 7");
+control_reported = !wrong_control && !last(RESULTS).ok;
+pop(RESULTS);
+check("negative control was reported as a failure", control_reported, "checker result=" + str(wrong_control));
+if (env("IT_MUTATE_RECOVER", "0") == "1") { check("injected assertion failure", false, "failure-detection control"); }
+
+passes = 0; FAILURES = 0; idx = 0;
+while (idx < len(RESULTS)) { if (RESULTS[idx].ok) { passes = passes + 1; } else { FAILURES = FAILURES + 1; } idx = idx + 1; }
+print(str(len(RESULTS)) + " assertions: " + str(passes) + " pass, " + str(FAILURES) + " fail");
+if (FAILURES > 0) { lm_exit(1); }

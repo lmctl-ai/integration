@@ -1,0 +1,172 @@
+# tests/command-literals.lms -- Integration tests for system/cmd literals and cmd_render
+#
+# Covers:
+# - system and cmd command literals
+# - hostile words with quotes, spaces, $(...), backticks, semicolons, pipes, newline, unicode
+#   staying single argv words and round-tripping
+# - argv-only: string passed to system is refused with documented advice message
+# - cmd_render posix/windows/powershell dialects on fixed vectors
+# - two front-ends agreement (LMCTL_BIN and LMSCRIPT_BIN)
+# - negative control
+
+import "lib.lms";
+
+RESULTS = [];
+
+LMCTL_BIN = env("LMCTL_BIN", "/home/mma/repos/lmctl-mono-it-bin/lmctl-src/bin/lmctl");
+LMSCRIPT_BIN = env("LMSCRIPT_BIN", "/home/mma/repos/lmctl-mono-it-bin/lmscript/bin/lmscript");
+NODE_BIN = env("NODE_BIN", "node");
+
+printer = [NODE_BIN, "-e", "process.stdout.write(JSON.stringify(process.argv.slice(1)))", "--"];
+
+# 1. Hostile words vectors
+w_quotes = "\"double\" and 'single' and `backtick`";
+w_spaces = "words with spaces and\ttabs";
+w_expand = "$(whoami) and $(echo pwned) and ${PATH}";
+w_backticks = "`date` and `rm -rf /`";
+w_semi = "arg1; rm -rf /; echo semi";
+w_pipes = "arg1 | cat | grep foo > /dev/null &";
+w_newline = "line1\nline2\r\nline3";
+w_unicode = "世界 🚀 café \u00e9 ñ 測試";
+w_dashes = "--not-an-option -rf --help -";
+w_empty = "";
+
+# 2. cmd literal produces exact argv array preserving hostile words as single elements
+cmd_argv = cmd ${printer} ${w_quotes} ${w_spaces} ${w_expand} ${w_backticks} ${w_semi} ${w_pipes} ${w_newline} ${w_unicode} ${w_dashes} "";
+record(RESULTS, "cmd literal produces expected total argv count", len(cmd_argv) == 14, "count=" + str(len(cmd_argv)));
+same(RESULTS, "cmd literal argv[4] quotes match", w_quotes, cmd_argv[4]);
+same(RESULTS, "cmd literal argv[5] spaces match", w_spaces, cmd_argv[5]);
+same(RESULTS, "cmd literal argv[6] shell expansion match", w_expand, cmd_argv[6]);
+same(RESULTS, "cmd literal argv[7] backticks match", w_backticks, cmd_argv[7]);
+same(RESULTS, "cmd literal argv[8] semicolons match", w_semi, cmd_argv[8]);
+same(RESULTS, "cmd literal argv[9] pipes match", w_pipes, cmd_argv[9]);
+same(RESULTS, "cmd literal argv[10] newline match", w_newline, cmd_argv[10]);
+same(RESULTS, "cmd literal argv[11] unicode match", w_unicode, cmd_argv[11]);
+same(RESULTS, "cmd literal argv[12] dashes match", w_dashes, cmd_argv[12]);
+same(RESULTS, "cmd literal argv[13] empty match", w_empty, cmd_argv[13]);
+
+# 3. system(cmd_argv) executes and round-trips all hostile words to child process
+res_cmd = system(cmd_argv, 10000);
+record(RESULTS, "system(cmd_argv) exited 0", res_cmd.code == 0, "code=" + str(res_cmd.code));
+parsed_cmd = json_parse(res_cmd.stdout);
+record(RESULTS, "child received exact word count from cmd literal", len(parsed_cmd) == 10, "count=" + str(len(parsed_cmd)));
+same(RESULTS, "child received exact quotes word", w_quotes, parsed_cmd[0]);
+same(RESULTS, "child received exact spaces word", w_spaces, parsed_cmd[1]);
+same(RESULTS, "child received exact shell expansion word unexpanded", w_expand, parsed_cmd[2]);
+same(RESULTS, "child received exact backticks word unexpanded", w_backticks, parsed_cmd[3]);
+same(RESULTS, "child received exact semicolons word unparsed", w_semi, parsed_cmd[4]);
+same(RESULTS, "child received exact pipes word unparsed", w_pipes, parsed_cmd[5]);
+same(RESULTS, "child received exact newline word", w_newline, parsed_cmd[6]);
+same(RESULTS, "child received exact unicode word", w_unicode, parsed_cmd[7]);
+same(RESULTS, "child received exact dashes word", w_dashes, parsed_cmd[8]);
+same(RESULTS, "child received exact empty word", w_empty, parsed_cmd[9]);
+
+# 4. system command literal executes directly and round-trips all hostile words
+res_sys = system ${printer} ${w_quotes} ${w_spaces} ${w_expand} ${w_backticks} ${w_semi} ${w_pipes} ${w_newline} ${w_unicode} ${w_dashes} "";
+record(RESULTS, "system literal exited 0", res_sys.code == 0, "code=" + str(res_sys.code));
+parsed_sys = json_parse(res_sys.stdout);
+record(RESULTS, "child received exact word count from system literal", len(parsed_sys) == 10, "count=" + str(len(parsed_sys)));
+same(RESULTS, "system literal received exact quotes word", w_quotes, parsed_sys[0]);
+same(RESULTS, "system literal received exact spaces word", w_spaces, parsed_sys[1]);
+same(RESULTS, "system literal received exact shell expansion word unexpanded", w_expand, parsed_sys[2]);
+same(RESULTS, "system literal received exact backticks word unexpanded", w_backticks, parsed_sys[3]);
+same(RESULTS, "system literal received exact semicolons word unparsed", w_semi, parsed_sys[4]);
+same(RESULTS, "system literal received exact pipes word unparsed", w_pipes, parsed_sys[5]);
+same(RESULTS, "system literal received exact newline word", w_newline, parsed_sys[6]);
+same(RESULTS, "system literal received exact unicode word", w_unicode, parsed_sys[7]);
+same(RESULTS, "system literal received exact dashes word", w_dashes, parsed_sys[8]);
+same(RESULTS, "system literal received exact empty word", w_empty, parsed_sys[9]);
+
+# 5. Argv-only enforcement: passing a string to system is refused with documented message
+root = temp_file() + "-cmd-lit-suite";
+system(["mkdir", "-p", root]);
+str_script = root + "/test_string_to_system.lms";
+write_file(str_script, "r = system(\"echo hi\");\n");
+
+r_str_lms = system([LMSCRIPT_BIN, str_script]);
+record(RESULTS, "lmscript refuses system(string) with exit 2",
+       r_str_lms.code == 2 && contains(r_str_lms.stderr, "command: system(string) is not supported"),
+       "code=" + str(r_str_lms.code) + " err=" + r_str_lms.stderr);
+record(RESULTS, "lmscript refusal includes documented advice",
+       contains(r_str_lms.stderr, "write system PROGRAM ARGS or system([program, args...])"),
+       "err=" + r_str_lms.stderr);
+
+r_str_ctl = system([LMCTL_BIN, "script", str_script]);
+record(RESULTS, "lmctl script refuses system(string) with exit 2",
+       r_str_ctl.code == 2 && contains(r_str_ctl.stderr, "command: system(string) is not supported"),
+       "code=" + str(r_str_ctl.code) + " err=" + r_str_ctl.stderr);
+record(RESULTS, "lmctl script refusal includes documented advice",
+       contains(r_str_ctl.stderr, "write system PROGRAM ARGS or system([program, args...])"),
+       "err=" + r_str_ctl.stderr);
+
+# 6. cmd_render posix/windows/powershell dialects on fixed vectors
+
+# Vector 1: Simple identifier words
+v1 = ["git", "status"];
+same(RESULTS, "cmd_render v1 posix", "git status", cmd_render(v1, "posix"));
+same(RESULTS, "cmd_render v1 windows", "git status", cmd_render(v1, "windows"));
+same(RESULTS, "cmd_render v1 powershell", "'git' 'status'", cmd_render(v1, "powershell"));
+
+# Vector 2: Word with spaces
+v2 = ["git", "commit", "-m", "hello world"];
+same(RESULTS, "cmd_render v2 posix", "git commit -m 'hello world'", cmd_render(v2, "posix"));
+same(RESULTS, "cmd_render v2 windows", "git commit -m \"hello world\"", cmd_render(v2, "windows"));
+same(RESULTS, "cmd_render v2 powershell", "'git' 'commit' '-m' 'hello world'", cmd_render(v2, "powershell"));
+
+# Vector 3: Single quotes in arguments
+v3 = ["echo", "can't touch this"];
+same(RESULTS, "cmd_render v3 posix", "echo 'can'\\''t touch this'", cmd_render(v3, "posix"));
+same(RESULTS, "cmd_render v3 windows", "echo \"can't touch this\"", cmd_render(v3, "windows"));
+same(RESULTS, "cmd_render v3 powershell", "'echo' 'can''t touch this'", cmd_render(v3, "powershell"));
+
+# Vector 4: Double quotes in arguments
+v4 = ["node", "-e", "console.log(\"hi\")"];
+same(RESULTS, "cmd_render v4 posix", "node -e 'console.log(\"hi\")'", cmd_render(v4, "posix"));
+same(RESULTS, "cmd_render v4 windows", "node -e \"console.log(\\\"hi\\\")\"", cmd_render(v4, "windows"));
+same(RESULTS, "cmd_render v4 powershell", "'node' '-e' 'console.log(\"hi\")'", cmd_render(v4, "powershell"));
+
+# Vector 5: Empty string argument
+v5 = ["echo", ""];
+same(RESULTS, "cmd_render v5 posix", "echo ''", cmd_render(v5, "posix"));
+same(RESULTS, "cmd_render v5 windows", "echo \"\"", cmd_render(v5, "windows"));
+same(RESULTS, "cmd_render v5 powershell", "'echo' ''", cmd_render(v5, "powershell"));
+
+# Vector 6: Backslashes and quotes
+v6 = ["cmd", "a\\b", "c\"d", "e\\"];
+same(RESULTS, "cmd_render v6 posix", "cmd 'a\\b' 'c\"d' 'e\\'", cmd_render(v6, "posix"));
+same(RESULTS, "cmd_render v6 windows", "cmd a\\b \"c\\\"d\" e\\", cmd_render(v6, "windows"));
+same(RESULTS, "cmd_render v6 powershell", "'cmd' 'a\\b' 'c\"d' 'e\\'", cmd_render(v6, "powershell"));
+
+# 7. cmd_render error cases
+err_script = root + "/test_cmd_render_err.lms";
+write_file(err_script, "cmd_render([\"a\"], \"unknown_dialect\");\n");
+r_err = system([LMSCRIPT_BIN, err_script]);
+record(RESULTS, "cmd_render unknown dialect rejected with clear message",
+       r_err.code == 1 && contains(r_err.stderr, "unknown dialect 'unknown_dialect'"),
+       "code=" + str(r_err.code) + " err=" + r_err.stderr);
+
+# 8. Frontend agreement: CLI vs LMScript host parity
+parity_script = root + "/test_parity.lms";
+write_file(parity_script,
+  "v = [\"git\", \"commit\", \"-m\", \"spaces & 'quotes' and $eval\"];\n" +
+  "println(cmd_render(v, \"posix\"));\n" +
+  "println(cmd_render(v, \"windows\"));\n" +
+  "println(cmd_render(v, \"powershell\"));\n");
+
+r_par_lms = system([LMSCRIPT_BIN, parity_script]);
+r_par_ctl = system([LMCTL_BIN, "script", parity_script]);
+same(RESULTS, "frontend parity: cmd_render outputs match across lmscript and lmctl script",
+     r_par_lms.stdout, r_par_ctl.stdout);
+
+# 9. Negative control
+if (env("FAULT_COMMAND_LITERALS", "0") == "1") {
+  record(RESULTS, "negative control: deliberate injected failure", false, "injected fault");
+}
+
+# Cleanup scratch suite directory
+system(["rm", "-rf", root]);
+
+diff = summary(RESULTS);
+if (diff > 0) {
+  lm_exit(1);
+}

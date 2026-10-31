@@ -100,12 +100,59 @@ jobs:
             echo "- miniplayer commit: ${{ needs.plan.outputs.miniplayer }}"
           } >> "$GITHUB_STEP_SUMMARY"
           lmctl --version; lmscript --version; lmmock --version
-      - name: T0 ClaudeMock (no network)
-        run: bash scripts/run-scenario.sh scenarios/t0-claudemock
-      - name: T1 lm_prompt through lmmock llm-api
-        run: bash scripts/run-scenario.sh scenarios/t1-lmmock-ai
+      - name: T0 scenarios (ClaudeMock, no network)
+        run: bash scripts/run-all-scenarios.sh t0
+      - name: T1 scenarios (miniplayer to lmmock llm-api)
+        run: bash scripts/run-all-scenarios.sh t1
       - name: Failing controls
         run: bash tests/scenario-controls.sh
+
+  suite-controls:
+    name: ported suite controls
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    needs: plan
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: lmctl-ai/integration
+          ref: ${{ inputs.integration-ref || github.sha }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ needs.plan.outputs.node }}
+      - name: Runner semantics and pure-suite mutations
+        run: bash tests/suite-controls.sh
+
+  mono-test:
+    name: mono-test port / lmctl ${{ matrix.lmctl }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        lmctl: [latest, staging]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: lmctl-ai/integration
+          ref: ${{ inputs.integration-ref || github.sha }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ needs.plan.outputs.node }}
+      - id: setup
+        uses: ./actions/setup
+        with:
+          lmctl: ${{ matrix.lmctl }}
+          miniplayer: ${{ needs.plan.outputs.miniplayer }}
+      - name: Ported lmctl-mono-test suites
+        env:
+          INTEGRATION_BIN: ${{ runner.temp }}/integration-bin
+        run: node suites/mono-test/run.mjs
+      - name: Control, a lmctl that does nothing must turn every lmctl-driven suite red
+        env:
+          INTEGRATION_BIN: ${{ runner.temp }}/integration-bin
+        run: node suites/mono-test/run.mjs --control broken-bin
 
   # One stable check name for the PR gate: red unless the selftest and every scenario leg are green.
   # Mark `gate` as the required status check of the main ruleset once the operator wants merges blocked.
@@ -114,7 +161,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     if: ${{ always() }}
-    needs: [plan, selftest, scenarios]
+    needs: [plan, selftest, scenarios, suite-controls, mono-test]
     steps:
       - name: Require green jobs
         env:

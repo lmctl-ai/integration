@@ -1,0 +1,12 @@
+{
+  "claude_probe_flags": ["--setting-sources", "", "--strict-mcp-config", "--disable-slash-commands"],
+  "codex": {"models":[{"slug":"gpt-6-luna","visibility":"list"},{"slug":"hidden","visibility":"hide"}]},
+  "agy": "gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\n",
+  "kimi": "[models.\"kimi-code/k3\"]\nmodel = \"k3\"\n[models.'kimi-code/k3-256k']\n",
+  "listing": {"schema_version":2,"providers":[
+    {"provider":"codex","status":"ok","models":[{"id":"gpt-6-luna","status":"valid"}]},
+    {"provider":"agy","status":"ok","models":[{"id":"gemini-3.8-flash-medium","display_name":"Gemini 3.8 Flash (Medium)","status":"valid"}]},
+    {"provider":"kimi","status":"ok","models":[{"id":"kimi-code/k3","status":"valid"},{"id":"kimi-code/k3-256k","status":"valid"}]},
+    {"provider":"claude","status":"ok","models":[{"id":"claude-opus-5-5","status":"unverified"}]}
+  ]}
+}

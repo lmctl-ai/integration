@@ -1,0 +1,1 @@
+print(json_stringify({args: args, ARGV: ARGV}, 0));

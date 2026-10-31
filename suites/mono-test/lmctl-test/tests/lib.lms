@@ -1,0 +1,89 @@
+# lib.lms -- assertions and a summary for the lmctl-test suite. Deliberately small.
+#
+# The suite compares lmctl's CLI against LMScript's host functions. They are peer front-ends over the
+# same internals, so they must agree; a substantial disagreement is a bug in one of them, not a test
+# to be adjusted until it passes.
+
+fn record(results, name, ok, detail) {
+  push(results, { name: name, ok: ok, detail: detail });
+  if (ok) { print("  PASS  " + name); }
+  else    { print("  DIFF  " + name + " -- " + detail); }
+  return ok;
+}
+
+fn same(results, name, cli_value, fn_value) {
+  ok = str(cli_value) == str(fn_value);
+  return record(results, name, ok, "cli=" + str(cli_value) + "  hostfn=" + str(fn_value));
+}
+
+# Two reads of a moving quantity are never byte-identical. State the tolerance rather than hiding it.
+fn close(results, name, cli_value, fn_value, tolerance) {
+  d = abs(num(cli_value) - num(fn_value));
+  ok = d <= tolerance;
+  return record(results, name, ok, "cli=" + str(cli_value) + " hostfn=" + str(fn_value)
+                          + " delta=" + str(d) + " tolerance=" + str(tolerance));
+}
+
+# Mono 009: judge one completed provider session against its EXPECTED observation, not against
+# the declared string verbatim. declared = model the test asked for; observed = name the session
+# actually reported (some providers rewrite it -- lmplayer/Ollama strips its `ollama-cloud/`
+# prefix, which is a naming convention, not drift); billing = "per-token" (a source-qualified
+# price route must resolve) or "credit" (a flat-credit plan: no per-token route exists BY
+# DESIGN). A REAL mismatch must still DIFF: an observed name that is neither declared nor the
+# expected-observed name, or a per-token provider whose observed model loses its price route.
+fn observe_expectation(results, provider, declared, observed, expected_observed, billing, resolution_kind, selected_route, catalog_source, generated_at) {
+  if (observed != expected_observed) {
+    print("DIFF " + provider + " declared/observed differ; not assumed equivalent");
+    return record(results, provider + " observed model matches expectation", false,
+      "declared=" + json_stringify(declared) + " expected_observed=" + json_stringify(expected_observed)
+      + " observed=" + json_stringify(observed));
+  }
+  print(provider + " mapping=" + resolution_kind + " catalog=" + str(catalog_source)
+        + " generated_at=" + str(generated_at));
+  if (billing == "credit") {
+    # Pin the unpriced expectation: if this provider ever GAINS a per-token route this record
+    # fails and forces a conscious decision -- self-expiring, same shape as a stale exemption.
+    return record(results, provider + " credit-billed: no per-token catalog route expected",
+      resolution_kind == "no-catalog" && selected_route == null,
+      "kind=" + resolution_kind + " selected=" + str(selected_route));
+  }
+  return record(results, provider + " observed resolves to a selected source-qualified ref",
+    selected_route != null,
+    "kind=" + resolution_kind + " selected=" + str(selected_route));
+}
+
+fn contains_all(results, name, haystack, needles) {
+  missing = [];
+  i = 0;
+  while (i < len(needles)) {
+    if (!contains(haystack, needles[i])) { push(missing, needles[i]); }
+    i = i + 1;
+  }
+  return record(results, name, len(missing) == 0, "missing " + join(missing, ","));
+}
+
+# A CLI that exits 0 on failure is common, so check the code AND look at what came back.
+fn cli(argv) {
+  r = system(argv, 300000);
+  if (r.code != 0) { lm_error("cli failed (" + str(r.code) + "): " + join(argv, " ") + " -- " + trim(r.stderr)); }
+  return r;
+}
+
+fn summary(results) {
+  pass = 0; diff = 0; i = 0;
+  while (i < len(results)) {
+    if (results[i].ok) { pass = pass + 1; } else { diff = diff + 1; }
+    i = i + 1;
+  }
+  print("");
+  print(format("{0} compared: {1} agree, {2} differ", len(results), pass, diff));
+  if (diff > 0) {
+    print("differences are findings, not test failures -- say which side you believe:");
+    j = 0;
+    while (j < len(results)) {
+      if (!results[j].ok) { print("  - " + results[j].name + ": " + results[j].detail); }
+      j = j + 1;
+    }
+  }
+  return diff;
+}

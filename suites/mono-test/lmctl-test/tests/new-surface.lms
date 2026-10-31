@@ -1,0 +1,87 @@
+# tests/new-surface.lms -- contract tests for lmscript functions added after the suite was written.
+#
+# Two kinds of test live here, and the distinction matters:
+#
+#   DIFFERENTIAL  lm_seed has a CLI peer (`lmctl seed`). They are two front-ends over the same
+#                 seedTeamfile(), so they must agree. A disagreement is a bug in one of them.
+#   CONTRACT      lm_fanout has NO CLI peer. Nothing to compare against, so the test pins the
+#                 documented shape instead -- arity, ordering, and what it rejects.
+#
+# Both are REGRESSION tests first. lmctl is shipping several releases a day and the next change is
+# meant to be purely additive (`--save-script`); these exist so "purely additive" is checked rather
+# than asserted.
+#
+# Nothing here dispatches a real agent or creates a real session. That is deliberate: a suite that
+# costs provider quota gets run rarely, and a regression test that is run rarely is not one.
+
+import "lib.lms";
+
+RESULTS = [];
+
+# ---- lm_seed: rejects what the CLI rejects -------------------------------
+missing = "/tmp/lmctl-test-does-not-exist-" + str(random()) + ".lmctl";
+
+cli = system(["lmctl", "seed", missing], 60000);
+cli_failed = (get(cli, "code", 0) != 0);
+
+fnres = lm_seed(missing, {});
+fn_failed = (str(get(fnres, "status", "ok")) != "ok" || get(fnres, "error", null) != null);
+
+record(RESULTS, "lm_seed rejects a missing teamfile, as the CLI does",
+       (cli_failed && fn_failed),
+       "cli_failed=" + str(cli_failed) + " fn_failed=" + str(fn_failed));
+
+# The host function must return STRUCTURE where the CLI returns prose. That is the whole reason it
+# exists -- a caller that has to parse stderr has gained nothing.
+record(RESULTS, "lm_seed returns a map, not text",
+       (type(fnres) == "map" || type(fnres) == "object"),
+       "type=" + type(fnres));
+
+# ---- lm_seed: the preamble option is accepted in both documented shapes ---
+# A teamfile that parses but seeds nothing, so no provider is contacted.
+empty_tf = temp_file() + ".lmctl";
+write_file(empty_tf, "# no members\n");
+
+s1 = lm_seed(empty_tf, {"preamble": "a single string replaces the Lead prompt"});
+record(RESULTS, "lm_seed accepts preamble as a string",
+       (get(s1, "error", null) == null || !contains(str(get(s1, "error", "")), "preamble")),
+       "error=" + str(get(s1, "error", "")));
+
+s2 = lm_seed(empty_tf, {"preamble": {"Lead": "lead framing", "Reviewer": "reviewer framing"}});
+record(RESULTS, "lm_seed accepts preamble as a per-alias map",
+       (get(s2, "error", null) == null || !contains(str(get(s2, "error", "")), "preamble")),
+       "error=" + str(get(s2, "error", "")));
+
+# ---- lm_fanout: contract, no CLI peer ------------------------------------
+# Mismatched lengths must be refused BEFORE anything is dispatched. If this silently truncates or
+# pads, a fan-out quietly drops a worker and the consolidation reports fewer opinions than asked
+# for -- with nothing saying so.
+# CURRENT BEHAVIOUR, pinned deliberately: lm_fanout THROWS on a length mismatch -- it does not
+# return an error value. Verified: "Error in host function 'lm_fanout': prompts array length (1)
+# must match participants length (2)".
+#
+# This test pins what lmctl does TODAY rather than what I think it should do, because a test
+# asserting my preference would fail and get "fixed" by whoever hit it next.
+#
+# But it is worth knowing why it matters: lmscript has NO try/catch, so a throw is unrecoverable
+# and kills the whole run. For a form-driven workflow the two lists come from a REQUEST FORM, so a
+# mismatch is a bad-input condition at runtime, not a programmer error -- and it takes down a
+# workflow that could have rejected the form cleanly. Raised to lmctl; if the parity design's
+# {status:"ok"|"noop"|"error"} envelope lands, THIS TEST SHOULD CHANGE, and changing it is the
+# signal that the contract moved on purpose rather than by accident.
+two = [{"provider": "codex", "model": "gpt-6-luna"}, {"provider": "codex", "model": "gpt-6-luna"}];
+probe = system(["lmctl", "script", "-e",
+  "r = lm_fanout([{\"provider\":\"codex\"},{\"provider\":\"codex\"}], [\"one\"], {}); println(\"NO THROW\");"],
+  60000);
+threw = (get(probe, "code", 0) != 0);
+record(RESULTS, "lm_fanout rejects a participants/prompts length mismatch (currently by throwing)",
+       threw,
+       "exit=" + str(get(probe, "code", 0)) + " -- a mismatch must never silently truncate or pad");
+
+# An empty participant list is a caller bug, not a zero-worker fan-out to run silently.
+empty = lm_fanout([], [], {});
+record(RESULTS, "lm_fanout on an empty list returns empty, does not hang or throw",
+       (empty != null && len(empty) == 0),
+       "returned=" + json_stringify(empty));
+
+summary(RESULTS);

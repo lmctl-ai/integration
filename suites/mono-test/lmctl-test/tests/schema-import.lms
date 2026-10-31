@@ -1,0 +1,662 @@
+# tests/schema-import.lms -- Integration tests for schema-module imports (import "./x.cli.schema.v1.json" [as ns])
+#
+# Covers new schema module contract on both front-ends (LMSCRIPT_BIN and LMCTL_BIN):
+# - namespace from tool name and mismatch/alias errors
+# - keyword namespace error with alias remedy
+# - collision with builtin and native module names
+# - positional + opts mapping
+# - check-time errors for literal args (unknown/typo/type/enum/required) with zero spawns
+# - --check/--dry-run/default preflight spawn nothing; real run spawns once
+# - readonly and confirm options map to runner flags (--readonly, --confirm)
+# - dryrun key refusal
+# - verbatim argv (spaces, quotes, ;, $( ), newline) via shell:false
+# - large input path (>100KB) via --input-file with 0600 mode and cleanup
+# - {success:false} error envelope with VALIDATION_ERROR and stale-snapshot hint
+# - nonzero exit code and stderr tail
+# - PATH as given (tool absent -> status error map, relative PATH forms behave as OS)
+# - long-running (65 s) tool is NOT cut off
+# - run_script child inherits imports
+# - lmscript standalone and lmctl script agree (frontend parity)
+# - negative control for failure-detection harness
+
+import "lib.lms";
+
+RESULTS = [];
+
+LMCTL_BIN = env("LMCTL_BIN", "/home/mma/repos/lmctl-mono-clitools-build2/bin/lmctl");
+LMSCRIPT_BIN = env("LMSCRIPT_BIN", "/home/mma/repos/lmctl-mono-clitools-build2/bin/lmscript");
+NODE_BIN = env("NODE_BIN", "node");
+
+root = temp_file() + "-schema-import-suite";
+bin_dir = root + "/bin";
+schemas_dir = root + "/schemas";
+system(["mkdir", "-p", bin_dir], 30000);
+system(["mkdir", "-p", schemas_dir], 30000);
+
+record_file = root + "/calls.jsonl";
+
+# Build fake tool script
+fake_tool_src = "#!/usr/bin/env node\n" +
+"const fs = require('node:fs');\n" +
+"if (process.argv[2] === '--schema') {\n" +
+"  const schemaPath = process.env.FAKE_SCHEMA_FILE;\n" +
+"  if (schemaPath && fs.existsSync(schemaPath)) {\n" +
+"    process.stdout.write(fs.readFileSync(schemaPath, 'utf8'));\n" +
+"    process.exit(0);\n" +
+"  }\n" +
+"}\n" +
+"const rec = process.env.FAKE_RECORD;\n" +
+"if (rec) {\n" +
+"  fs.appendFileSync(rec, JSON.stringify(process.argv.slice(2)) + '\\n');\n" +
+"  const f = process.argv.indexOf('--input-file');\n" +
+"  if (f > 0 && process.argv[f + 1]) {\n" +
+"    const fp = process.argv[f + 1];\n" +
+"    const stat = fs.statSync(fp);\n" +
+"    fs.writeFileSync(rec + '.file', fs.readFileSync(fp, 'utf8'));\n" +
+"    fs.appendFileSync(rec + '.info', 'mode:' + (stat.mode & 0o777).toString(8) + ',exists:' + fs.existsSync(fp) + '\\n');\n" +
+"  }\n" +
+"}\n" +
+"const mode = process.env.FAKE_MODE || 'ok';\n" +
+"if (mode === 'envelope') {\n" +
+"  process.stdout.write(JSON.stringify({\n" +
+"    success: false,\n" +
+"    error: {\n" +
+"      code: 'VALIDATION_ERROR',\n" +
+"      message: 'bad input',\n" +
+"      data: { issues: [{ code: 'UNKNOWN_PARAM', message: 'x' }] }\n" +
+"    }\n" +
+"  }));\n" +
+"  process.exit(2);\n" +
+"}\n" +
+"if (mode === 'exit') {\n" +
+"  process.stderr.write('something went wrong\\nboom\\n');\n" +
+"  process.exit(3);\n" +
+"}\n" +
+"if (mode === 'parse') {\n" +
+"  process.stdout.write('not valid json');\n" +
+"  process.exit(0);\n" +
+"}\n" +
+"if (mode === 'sleep_65') {\n" +
+"  setTimeout(() => {\n" +
+"    process.stdout.write(JSON.stringify({ slept: 65 }));\n" +
+"    process.exit(0);\n" +
+"  }, 65000);\n" +
+"  return;\n" +
+"}\n" +
+"process.stdout.write(process.env.FAKE_JSON || JSON.stringify({ clean: true }));\n" +
+"process.exit(0);\n";
+
+tl_bin = bin_dir + "/tl";
+write_file(tl_bin, fake_tool_src);
+system(["chmod", "+x", tl_bin], 30000);
+
+# Also provide symlinks for 'for' and 'git' executables so alias tests can invoke them
+system(["ln", "-sf", tl_bin, bin_dir + "/for"], 30000);
+system(["ln", "-sf", tl_bin, bin_dir + "/git"], 30000);
+
+# 1. Standard schema: tl.cli.schema.v1.json
+schema_tl = schemas_dir + "/tl.cli.schema.v1.json";
+write_file(schema_tl, "{\n" +
+"  \"schema\": \"cli.schema.v1\",\n" +
+"  \"tool\": \"tl\",\n" +
+"  \"version\": \"1.2.3\",\n" +
+"  \"operations\": [\n" +
+"    {\n" +
+"      \"name\": \"lm_read\",\n" +
+"      \"access\": \"read\",\n" +
+"      \"description\": \"Read something\",\n" +
+"      \"params\": [\n" +
+"        { \"name\": \"path\", \"type\": \"string\", \"occurs\": \"?\" },\n" +
+"        { \"name\": \"mode\", \"type\": \"string\", \"occurs\": \"?\", \"enum\": [\"a\", \"b\"] }\n" +
+"      ]\n" +
+"    },\n" +
+"    {\n" +
+"      \"name\": \"put\",\n" +
+"      \"description\": \"Write value\",\n" +
+"      \"params\": [\n" +
+"        { \"name\": \"value\", \"type\": \"string\", \"occurs\": \"1\" }\n" +
+"      ]\n" +
+"    },\n" +
+"    {\n" +
+"      \"name\": \"show\",\n" +
+"      \"access\": \"read\",\n" +
+"      \"params\": [\n" +
+"        { \"name\": \"target\", \"type\": \"string\", \"occurs\": \"1\", \"positional\": true },\n" +
+"        { \"name\": \"n\", \"type\": \"number\", \"occurs\": \"?\" }\n" +
+"      ]\n" +
+"    }\n" +
+"  ]\n" +
+"}\n");
+
+# 2. Keyword tool schema: kw.cli.schema.v1.json (tool = "for")
+schema_kw = schemas_dir + "/kw.cli.schema.v1.json";
+write_file(schema_kw, "{\n" +
+"  \"schema\": \"cli.schema.v1\",\n" +
+"  \"tool\": \"for\",\n" +
+"  \"version\": \"1.0.0\",\n" +
+"  \"operations\": [\n" +
+"    { \"name\": \"ping\", \"params\": [] }\n" +
+"  ]\n" +
+"}\n");
+
+# 3. Native module collision schema: git_tool.cli.schema.v1.json (tool = "git")
+schema_git = schemas_dir + "/git_tool.cli.schema.v1.json";
+write_file(schema_git, "{\n" +
+"  \"schema\": \"cli.schema.v1\",\n" +
+"  \"tool\": \"git\",\n" +
+"  \"version\": \"1.0.0\",\n" +
+"  \"operations\": [\n" +
+"    { \"name\": \"ping\", \"params\": [] }\n" +
+"  ]\n" +
+"}\n");
+
+fn run_with_tool(frontend_bin, is_lmctl, extra_args, extra_env, timeout_ms) {
+  env_args = [
+    "env",
+    "PATH=" + bin_dir + ":" + env("NODE_DIR", "/usr/bin") + ":" + env("PATH", ""),
+    "HOME=" + root + "/home",
+    "LMCTL_HOME=" + root + "/profile",
+    "LMCTL_DB=" + root + "/state.db",
+    "FAKE_RECORD=" + record_file,
+    "FAKE_SCHEMA_FILE=" + schema_tl,
+    "NO_COLOR=1"
+  ];
+  if (len(extra_env) > 0) {
+    env_args = concat(env_args, extra_env);
+  }
+  call_args = concat(env_args, [frontend_bin]);
+  if (is_lmctl) {
+    call_args = concat(call_args, ["script"]);
+  }
+  call_args = concat(call_args, extra_args);
+  t = 60000;
+  if (timeout_ms != null && timeout_ms > 0) {
+    t = timeout_ms;
+  }
+  return system(call_args, t);
+}
+
+fn clear_calls() {
+  system(["rm", "-f", record_file, record_file + ".file", record_file + ".info"], 30000);
+}
+
+fn get_calls() {
+  if (!file_exists(record_file)) { return []; }
+  content = trim(read_file(record_file));
+  if (len(content) == 0) { return []; }
+  lines = split(content, "\n");
+  calls = [];
+  i = 0;
+  while (i < len(lines)) {
+    line = trim(lines[i]);
+    if (len(line) > 0) {
+      push(calls, json_parse(line));
+    }
+    i = i + 1;
+  }
+  return calls;
+}
+
+# ============================================================================
+# Section 1: Namespace from tool name and mismatch/alias errors
+# ============================================================================
+
+# 1a. Default namespace from document tool name executes correctly
+clear_calls();
+s_1a = root + "/s_1a.lms";
+write_file(s_1a, "import \"" + schema_tl + "\";\nr = tl.put({value: \"v1\"});\nprintln(\"STATUS:\" + r.status + \",CLEAN:\" + str(r.result.clean));\n");
+r_1a = run_with_tool(LMSCRIPT_BIN, false, [s_1a], [], 60000);
+record(RESULTS, "default namespace binds tool name and executes call",
+       r_1a.code == 0 && contains(r_1a.stdout, "STATUS:ok,CLEAN:true"),
+       "stdout=" + r_1a.stdout + " stderr=" + r_1a.stderr);
+
+# 1a-ctrl. Unbound namespace name fails check
+s_1a_ctrl = root + "/s_1a_ctrl.lms";
+write_file(s_1a_ctrl, "import \"" + schema_tl + "\";\nr = wrong_ns.put({value: \"v1\"});\n");
+r_1a_ctrl = run_with_tool(LMSCRIPT_BIN, false, ["--check", s_1a_ctrl], [], 60000);
+record(RESULTS, "unbound namespace name fails check (control)",
+       r_1a_ctrl.code != 0 && (contains(r_1a_ctrl.stderr, "package wrong_ns not loaded") || contains(r_1a_ctrl.stderr, "wrong_ns.put")),
+       "code=" + str(r_1a_ctrl.code) + " stderr=" + r_1a_ctrl.stderr);
+
+# 1b. Namespace alias with 'as' binds alias and executes call
+clear_calls();
+s_1b = root + "/s_1b.lms";
+write_file(s_1b, "import \"" + schema_tl + "\" as myalias;\nr = myalias.put({value: \"v2\"});\nprintln(\"STATUS:\" + r.status + \",CLEAN:\" + str(r.result.clean));\n");
+r_1b = run_with_tool(LMSCRIPT_BIN, false, [s_1b], [], 60000);
+record(RESULTS, "import as alias binds custom namespace",
+       r_1b.code == 0 && contains(r_1b.stdout, "STATUS:ok,CLEAN:true"),
+       "stdout=" + r_1b.stdout + " stderr=" + r_1b.stderr);
+
+# 1b-ctrl. Original tool name is unbound when imported as alias
+s_1b_ctrl = root + "/s_1b_ctrl.lms";
+write_file(s_1b_ctrl, "import \"" + schema_tl + "\" as myalias;\nr = tl.put({value: \"v2\"});\n");
+r_1b_ctrl = run_with_tool(LMSCRIPT_BIN, false, ["--check", s_1b_ctrl], [], 60000);
+record(RESULTS, "original tool name unbound when imported with as (control)",
+       r_1b_ctrl.code != 0 && (contains(r_1b_ctrl.stderr, "package tl not loaded") || contains(r_1b_ctrl.stderr, "tl.put")),
+       "code=" + str(r_1b_ctrl.code) + " stderr=" + r_1b_ctrl.stderr);
+
+# 1c. Include-once: importing same schema twice without alias is cleanly accepted
+s_1c = root + "/s_1c.lms";
+write_file(s_1c, "import \"" + schema_tl + "\";\nimport \"" + schema_tl + "\";\nr = tl.put({value: \"v3\"});\nprintln(\"STATUS:\" + r.status);\n");
+r_1c = run_with_tool(LMSCRIPT_BIN, false, [s_1c], [], 60000);
+record(RESULTS, "same schema file imported twice without alias is accepted",
+       r_1c.code == 0 && contains(r_1c.stdout, "STATUS:ok"),
+       "stdout=" + r_1c.stdout + " stderr=" + r_1c.stderr);
+
+# 1c-ctrl. Importing same schema file under different alias is rejected
+s_1c_ctrl = root + "/s_1c_ctrl.lms";
+write_file(s_1c_ctrl, "import \"" + schema_tl + "\";\nimport \"" + schema_tl + "\" as other;\n");
+r_1c_ctrl = run_with_tool(LMSCRIPT_BIN, false, ["--check", s_1c_ctrl], [], 60000);
+record(RESULTS, "same schema file re-imported under different alias fails check (control)",
+       r_1c_ctrl.code != 0 && contains(r_1c_ctrl.stderr, "already imported as tl"),
+       "code=" + str(r_1c_ctrl.code) + " stderr=" + r_1c_ctrl.stderr);
+
+# ============================================================================
+# Section 2: Keyword namespace error with alias remedy
+# ============================================================================
+
+# 2a. Tool name matching language keyword ('for') without alias fails check
+s_2a = root + "/s_2a.lms";
+write_file(s_2a, "import \"" + schema_kw + "\";\n");
+r_2a = run_with_tool(LMSCRIPT_BIN, false, ["--check", s_2a], [], 60000);
+record(RESULTS, "tool name matching keyword without alias fails check with usable identifier error",
+       r_2a.code != 0 && contains(r_2a.stderr, "namespace \"for\" is not a usable identifier; import it with as <identifier>"),
+       "code=" + str(r_2a.code) + " stderr=" + r_2a.stderr);
+
+# 2b. Alias remedy: importing keyword tool with 'as' passes check and executes
+clear_calls();
+s_2b = root + "/s_2b.lms";
+write_file(s_2b, "import \"" + schema_kw + "\" as for_tool;\nr = for_tool.ping();\nprintln(\"STATUS:\" + r.status);\n");
+r_2b = run_with_tool(LMSCRIPT_BIN, false, [s_2b], [], 60000);
+record(RESULTS, "alias remedy for keyword tool passes check and executes",
+       r_2b.code == 0 && contains(r_2b.stdout, "STATUS:ok"),
+       "stdout=" + r_2b.stdout + " stderr=" + r_2b.stderr);
+
+# ============================================================================
+# Section 3: Collision with native and builtin names
+# ============================================================================
+
+# 3a. Schema colliding with compiled-in native module name ('git') fails check
+s_3a = root + "/s_3a.lms";
+write_file(s_3a, "import \"" + schema_git + "\";\n");
+r_3a = run_with_tool(LMSCRIPT_BIN, false, ["--check", s_3a], [], 60000);
+record(RESULTS, "schema colliding with native module fails check",
+       r_3a.code != 0 && contains(r_3a.stderr, "Namespace collision: git is the native module native:git; import the schema with as <name>"),
+       "code=" + str(r_3a.code) + " stderr=" + r_3a.stderr);
+
+# 3b. Alias remedy for native module collision passes check and executes
+clear_calls();
+s_3b = root + "/s_3b.lms";
+write_file(s_3b, "import \"" + schema_git + "\" as git_cli;\nr = git_cli.ping();\nprintln(\"STATUS:\" + r.status);\n");
+r_3b = run_with_tool(LMSCRIPT_BIN, false, [s_3b], [], 60000);
+record(RESULTS, "alias remedy for native module collision executes cleanly",
+       r_3b.code == 0 && contains(r_3b.stdout, "STATUS:ok"),
+       "stdout=" + r_3b.stdout + " stderr=" + r_3b.stderr);
+
+# 3c. Schema imported with alias colliding with builtin function ('len') fails check
+s_3c = root + "/s_3c.lms";
+write_file(s_3c, "import \"" + schema_tl + "\" as len;\n");
+r_3c = run_with_tool(LMSCRIPT_BIN, false, ["--check", s_3c], [], 60000);
+record(RESULTS, "alias colliding with builtin function fails check",
+       r_3c.code != 0 && contains(r_3c.stderr, "Package name collision: 'len' is already a variable or function"),
+       "code=" + str(r_3c.code) + " stderr=" + r_3c.stderr);
+
+# 3c-ctrl. Non-colliding alias passes check (control)
+s_3c_ctrl = root + "/s_3c_ctrl.lms";
+write_file(s_3c_ctrl, "import \"" + schema_tl + "\" as len_tool;\n");
+r_3c_ctrl = run_with_tool(LMSCRIPT_BIN, false, ["--check", s_3c_ctrl], [], 60000);
+record(RESULTS, "non-colliding alias passes check (control)",
+       r_3c_ctrl.code == 0,
+       "code=" + str(r_3c_ctrl.code) + " stderr=" + r_3c_ctrl.stderr);
+
+# ============================================================================
+# Section 4: Positional and options mapping
+# ============================================================================
+
+clear_calls();
+s_4a = root + "/s_4a.lms";
+write_file(s_4a, "import \"" + schema_tl + "\";\nr = tl.show(\"main-ref\", {n: 42});\nprintln(\"STATUS:\" + r.status);\n");
+r_4a = run_with_tool(LMSCRIPT_BIN, false, [s_4a], [], 60000);
+calls_4a = get_calls();
+pos_ok = false;
+if (len(calls_4a) == 1 && calls_4a[0][0] == "show" && calls_4a[0][1] == "--input-json") {
+  p_doc = json_parse(calls_4a[0][2]);
+  pos_ok = p_doc.op == "show" && p_doc.params.target == "main-ref" && p_doc.params.n == 42;
+}
+record(RESULTS, "positional argument and options map passed correctly to process",
+       r_4a.code == 0 && pos_ok == true,
+       "stdout=" + r_4a.stdout + " calls=" + json_stringify(calls_4a));
+
+# 4-ctrl. Missing required positional argument fails at check time
+s_4_ctrl = root + "/s_4_ctrl.lms";
+write_file(s_4_ctrl, "import \"" + schema_tl + "\";\nr = tl.show({n: 42});\n");
+r_4_ctrl = run_with_tool(LMSCRIPT_BIN, false, ["--check", s_4_ctrl], [], 60000);
+record(RESULTS, "missing required positional argument fails check (control)",
+       r_4_ctrl.code != 0,
+       "code=" + str(r_4_ctrl.code) + " stderr=" + r_4_ctrl.stderr);
+
+# ============================================================================
+# Section 5: Check-time errors for literal args with zero spawns
+# ============================================================================
+
+# 5a. Typo in option key triggers suggestion and 0 spawns
+clear_calls();
+s_5a = root + "/s_5a.lms";
+write_file(s_5a, "import \"" + schema_tl + "\";\nr = tl.lm_read({pth: \".\"});\n");
+r_5a = run_with_tool(LMSCRIPT_BIN, false, ["--check", s_5a], [], 60000);
+calls_5a = get_calls();
+record(RESULTS, "--check catches typo in option with suggestion and zero spawns",
+       r_5a.code != 0 && contains(r_5a.stderr, "Unknown option 'pth'") &&
+       contains(r_5a.stderr, "did you mean 'path'") && len(calls_5a) == 0,
+       "code=" + str(r_5a.code) + " stderr=" + r_5a.stderr + " calls=" + str(len(calls_5a)));
+
+# 5a-ctrl. Correct option passes --check with 0 spawns
+clear_calls();
+s_5a_ctrl = root + "/s_5a_ctrl.lms";
+write_file(s_5a_ctrl, "import \"" + schema_tl + "\";\nr = tl.lm_read({path: \".\"});\n");
+r_5a_ctrl = run_with_tool(LMSCRIPT_BIN, false, ["--check", s_5a_ctrl], [], 60000);
+calls_5a_ctrl = get_calls();
+record(RESULTS, "correct option passes --check with zero spawns (control)",
+       r_5a_ctrl.code == 0 && len(calls_5a_ctrl) == 0,
+       "code=" + str(r_5a_ctrl.code) + " calls=" + str(len(calls_5a_ctrl)));
+
+# 5b. Wrong option type caught at check time with zero spawns
+clear_calls();
+s_5b = root + "/s_5b.lms";
+write_file(s_5b, "import \"" + schema_tl + "\";\nr = tl.lm_read({path: 12345});\n");
+r_5b = run_with_tool(LMSCRIPT_BIN, false, ["--check", s_5b], [], 60000);
+calls_5b = get_calls();
+record(RESULTS, "--check catches wrong option type with zero spawns",
+       r_5b.code != 0 && contains(r_5b.stderr, "expects string") && contains(r_5b.stderr, "got number") && len(calls_5b) == 0,
+       "code=" + str(r_5b.code) + " stderr=" + r_5b.stderr + " calls=" + str(len(calls_5b)));
+
+# 5c. Enum violation caught at check time with zero spawns
+clear_calls();
+s_5c = root + "/s_5c.lms";
+write_file(s_5c, "import \"" + schema_tl + "\";\nr = tl.lm_read({mode: \"invalid_mode\"});\n");
+r_5c = run_with_tool(LMSCRIPT_BIN, false, ["--check", s_5c], [], 60000);
+calls_5c = get_calls();
+record(RESULTS, "--check catches enum violation with zero spawns",
+       r_5c.code != 0 && contains(r_5c.stderr, "outside its declared values") && len(calls_5c) == 0,
+       "code=" + str(r_5c.code) + " stderr=" + r_5c.stderr + " calls=" + str(len(calls_5c)));
+
+# 5d. Missing required option caught at check time with zero spawns
+clear_calls();
+s_5d = root + "/s_5d.lms";
+write_file(s_5d, "import \"" + schema_tl + "\";\nr = tl.put({});\n");
+r_5d = run_with_tool(LMSCRIPT_BIN, false, ["--check", s_5d], [], 60000);
+calls_5d = get_calls();
+record(RESULTS, "--check catches missing required option with zero spawns",
+       r_5d.code != 0 && contains(r_5d.stderr, "Missing required option 'value'") && len(calls_5d) == 0,
+       "code=" + str(r_5d.code) + " stderr=" + r_5d.stderr + " calls=" + str(len(calls_5d)));
+
+# ============================================================================
+# Section 6: Dry-run and preflight simulation (never spawn); real run spawns once
+# ============================================================================
+
+# 6a. --dry-run returns simulated map for write and read ops, makes 0 spawns
+clear_calls();
+s_6a = root + "/s_6a.lms";
+write_file(s_6a, "import \"" + schema_tl + "\";\nr_w = tl.put({value: \"test\"});\nr_r = tl.lm_read({});\nprintln(\"W:\" + r_w.status + \",\" + r_w.simulated);\nprintln(\"R:\" + r_r.status + \",\" + r_r.simulated);\n");
+r_6a = run_with_tool(LMSCRIPT_BIN, false, ["--dry-run", s_6a], [], 60000);
+calls_6a = get_calls();
+record(RESULTS, "--dry-run returns simulated maps for all ops and spawns nothing",
+       r_6a.code == 0 && contains(r_6a.stdout, "W:simulated,tl.put") &&
+       contains(r_6a.stdout, "R:simulated,tl.lm_read") && len(calls_6a) == 0,
+       "stdout=" + r_6a.stdout + " calls=" + str(len(calls_6a)));
+
+# 6b. Real run default preflight simulates and spawns nothing; call executes once
+clear_calls();
+s_6b = root + "/s_6b.lms";
+write_file(s_6b, "import \"" + schema_tl + "\";\nr = tl.put({value: \"real_run\"});\nprintln(\"STATUS:\" + r.status);\n");
+r_6b = run_with_tool(LMSCRIPT_BIN, false, [s_6b], [], 60000);
+calls_6b = get_calls();
+record(RESULTS, "real run with default preflight spawns tool exactly once",
+       r_6b.code == 0 && contains(r_6b.stdout, "STATUS:ok") && len(calls_6b) == 1,
+       "stdout=" + r_6b.stdout + " calls=" + str(len(calls_6b)));
+
+# 6b-ctrl. --no-preflight also spawns exactly once (proves preflight did not add a spawn)
+clear_calls();
+r_6b_ctrl = run_with_tool(LMSCRIPT_BIN, false, ["--no-preflight", s_6b], [], 60000);
+calls_6b_ctrl = get_calls();
+record(RESULTS, "real run with --no-preflight also spawns tool exactly once (control)",
+       r_6b_ctrl.code == 0 && len(calls_6b_ctrl) == 1,
+       "calls=" + str(len(calls_6b_ctrl)));
+
+# 6c. Options readonly:true and confirm:true translate to CLI flags
+clear_calls();
+s_6c = root + "/s_6c.lms";
+write_file(s_6c, "import \"" + schema_tl + "\";\nr = tl.put({value: \"test\", readonly: true, confirm: true});\n");
+r_6c = run_with_tool(LMSCRIPT_BIN, false, [s_6c], [], 60000);
+calls_6c = get_calls();
+record(RESULTS, "readonly:true and confirm:true map to runner flags",
+       r_6c.code == 0 && len(calls_6c) == 1 &&
+       contains(json_stringify(calls_6c[0]), "--readonly") &&
+       contains(json_stringify(calls_6c[0]), "--confirm"),
+       "calls=" + json_stringify(calls_6c));
+
+# 6c-ctrl. readonly:false and confirm:false do not append flags (control)
+clear_calls();
+s_6c_ctrl = root + "/s_6c_ctrl.lms";
+write_file(s_6c_ctrl, "import \"" + schema_tl + "\";\nr = tl.put({value: \"test\", readonly: false, confirm: false});\n");
+r_6c_ctrl = run_with_tool(LMSCRIPT_BIN, false, [s_6c_ctrl], [], 60000);
+calls_6c_ctrl = get_calls();
+record(RESULTS, "readonly:false and confirm:false do not append runner flags (control)",
+       r_6c_ctrl.code == 0 && len(calls_6c_ctrl) == 1 &&
+       !contains(json_stringify(calls_6c_ctrl[0]), "--readonly") &&
+       !contains(json_stringify(calls_6c_ctrl[0]), "--confirm"),
+       "calls=" + json_stringify(calls_6c_ctrl));
+
+# 6d. 'dryrun' option key is refused
+s_6d = root + "/s_6d.lms";
+write_file(s_6d, "import \"" + schema_tl + "\";\nr = tl.put({value: \"v\", dryrun: true});\n");
+r_6d = run_with_tool(LMSCRIPT_BIN, false, ["--check", s_6d], [], 60000);
+record(RESULTS, "dryrun key is refused at check time",
+       r_6d.code != 0 && contains(r_6d.stderr, "Unknown option 'dryrun'"),
+       "code=" + str(r_6d.code) + " stderr=" + r_6d.stderr);
+
+# ============================================================================
+# Section 7: Verbatim argv with shell:false
+# ============================================================================
+
+clear_calls();
+s_7a = root + "/s_7a.lms";
+# Value containing spaces, quotes, semicolon, subshell syntax, and newlines
+hostile_val = "val with spaces 'single' \"double\" ; $(whoami) \n newline & < >";
+write_file(s_7a, "import \"" + schema_tl + "\";\nr = tl.put({value: " + json_stringify(hostile_val) + "});\n");
+r_7a = run_with_tool(LMSCRIPT_BIN, false, [s_7a], [], 60000);
+calls_7a = get_calls();
+val_ok = false;
+if (len(calls_7a) == 1 && calls_7a[0][0] == "put" && calls_7a[0][1] == "--input-json") {
+  p_doc = json_parse(calls_7a[0][2]);
+  val_ok = p_doc.params.value == hostile_val;
+}
+record(RESULTS, "verbatim argv delivered without shell interpretation",
+       r_7a.code == 0 && val_ok == true,
+       "stdout=" + r_7a.stdout + " calls=" + json_stringify(calls_7a));
+
+# ============================================================================
+# Section 8: Large input path (>100KB)
+# ============================================================================
+
+clear_calls();
+s_8a = root + "/s_8a.lms";
+# Create a payload of 105,000 bytes
+write_file(s_8a, "import \"" + schema_tl + "\";\nbig = repeat(\"X\", 105000);\nr = tl.put({value: big});\nprintln(\"STATUS:\" + r.status);\n");
+r_8a = run_with_tool(LMSCRIPT_BIN, false, [s_8a], [], 60000);
+calls_8a = get_calls();
+temp_info = "";
+if (file_exists(record_file + ".info")) {
+  temp_info = read_file(record_file + ".info");
+}
+# Also check that the temp file no longer exists after the call completes
+temp_file_removed = true;
+if (len(calls_8a) == 1 && contains(calls_8a[0], "--input-file")) {
+  f_idx = 0;
+  while (f_idx < len(calls_8a[0])) {
+    if (calls_8a[0][f_idx] == "--input-file") {
+      temp_path = calls_8a[0][f_idx + 1];
+      if (file_exists(temp_path)) { temp_file_removed = false; }
+    }
+    f_idx = f_idx + 1;
+  }
+}
+record(RESULTS, "payload over 100KB uses --input-file with 0600 mode and cleans up",
+       r_8a.code == 0 && contains(r_8a.stdout, "STATUS:ok") &&
+       len(calls_8a) == 1 && contains(calls_8a[0], "--input-file") &&
+       contains(temp_info, "mode:600") && temp_file_removed == true,
+       "stdout=" + r_8a.stdout + " info=" + temp_info + " removed=" + str(temp_file_removed));
+
+# 8-ctrl. Smaller payload uses --input-json directly (control)
+clear_calls();
+s_8_ctrl = root + "/s_8_ctrl.lms";
+write_file(s_8_ctrl, "import \"" + schema_tl + "\";\nr = tl.put({value: \"small\"});\n");
+r_8_ctrl = run_with_tool(LMSCRIPT_BIN, false, [s_8_ctrl], [], 60000);
+calls_8_ctrl = get_calls();
+record(RESULTS, "small payload uses --input-json directly (control)",
+       r_8_ctrl.code == 0 && len(calls_8_ctrl) == 1 &&
+       contains(calls_8_ctrl[0], "--input-json") && !contains(calls_8_ctrl[0], "--input-file"),
+       "calls=" + json_stringify(calls_8_ctrl));
+
+# ============================================================================
+# Section 9: {success:false} error envelope
+# ============================================================================
+
+clear_calls();
+s_9a = root + "/s_9a.lms";
+write_file(s_9a, "import \"" + schema_tl + "\";\nr = tl.put({value: \"trigger_envelope\"});\nprintln(\"STATUS:\" + r.status + \",CODE:\" + r.error.code + \",TOOL_CODE:\" + r.error.tool_code + \",STALE:\" + str(contains(r.error.message, \"stale\")));\n");
+r_9a = run_with_tool(LMSCRIPT_BIN, false, [s_9a], ["FAKE_MODE=envelope"], 60000);
+record(RESULTS, "error envelope produces error map with code envelope and stale hint",
+       r_9a.code == 0 && contains(r_9a.stdout, "STATUS:error,CODE:envelope,TOOL_CODE:VALIDATION_ERROR,STALE:true"),
+       "stdout=" + r_9a.stdout + " stderr=" + r_9a.stderr);
+
+# 9-ctrl. Successful call returns status ok (control)
+clear_calls();
+s_9_ctrl = root + "/s_9_ctrl.lms";
+write_file(s_9_ctrl, "import \"" + schema_tl + "\";\nr = tl.put({value: \"ok_val\"});\nprintln(\"STATUS:\" + r.status);\n");
+r_9_ctrl = run_with_tool(LMSCRIPT_BIN, false, [s_9_ctrl], ["FAKE_MODE=ok"], 60000);
+record(RESULTS, "successful call returns status ok (control)",
+       r_9_ctrl.code == 0 && contains(r_9_ctrl.stdout, "STATUS:ok"),
+       "stdout=" + r_9_ctrl.stdout);
+
+# ============================================================================
+# Section 10: Nonzero exit code
+# ============================================================================
+
+clear_calls();
+s_10a = root + "/s_10a.lms";
+write_file(s_10a, "import \"" + schema_tl + "\";\nr = tl.put({value: \"trigger_exit\"});\nprintln(\"STATUS:\" + r.status + \",CODE:\" + r.error.code + \",EXIT:\" + str(r.error.exit) + \",TAIL:\" + str(contains(r.error.stderr_tail, \"boom\")));\n");
+r_10a = run_with_tool(LMSCRIPT_BIN, false, [s_10a], ["FAKE_MODE=exit"], 60000);
+record(RESULTS, "nonzero exit code produces error map with code exit and stderr tail",
+       r_10a.code == 0 && contains(r_10a.stdout, "STATUS:error,CODE:exit,EXIT:3,TAIL:true"),
+       "stdout=" + r_10a.stdout + " stderr=" + r_10a.stderr);
+
+# ============================================================================
+# Section 11: PATH resolution as given
+# ============================================================================
+
+# 11a. Missing tool returns launch error map without throwing
+s_11a = root + "/s_11a.lms";
+write_file(s_11a, "import \"" + schema_tl + "\";\nr = tl.put({value: \"test\"});\nprintln(\"STATUS:\" + r.status + \",CODE:\" + r.error.code);\n");
+# Pass PATH with node only, omitting the fake tool bin_dir
+r_11a = system(["env", "PATH=" + env("NODE_DIR", "/usr/bin"), LMSCRIPT_BIN, s_11a], 60000);
+record(RESULTS, "missing tool on PATH returns launch error map without throwing",
+       r_11a.code == 0 && contains(r_11a.stdout, "STATUS:error,CODE:launch"),
+       "stdout=" + r_11a.stdout + " stderr=" + r_11a.stderr);
+
+# 11b. Relative PATH entry resolves tool as OS behaves
+# Copy tl into root directory and run from root with PATH=.:...
+system(["cp", tl_bin, root + "/tl"], 30000);
+system(["chmod", "+x", root + "/tl"], 30000);
+s_11b = root + "/s_11b.lms";
+write_file(s_11b, "import \"" + schema_tl + "\";\nr = tl.put({value: \"relative_path\"});\nprintln(\"STATUS:\" + r.status);\n");
+r_11b = system(["sh", "-c", "cd " + root + " && env PATH=.:" + env("NODE_DIR", "/usr/bin") + " " + LMSCRIPT_BIN + " " + s_11b], 60000);
+record(RESULTS, "relative dot PATH resolves and runs tool",
+       r_11b.code == 0 && contains(r_11b.stdout, "STATUS:ok"),
+       "stdout=" + r_11b.stdout + " stderr=" + r_11b.stderr);
+
+# ============================================================================
+# Section 12: Long-running (65 s) tool is NOT cut off
+# ============================================================================
+
+# Only run the full 65s sleep when not injecting fault
+if (env("FAULT_SCHEMA_IMPORT", "0") != "1" && env("SKIP_65S", "0") != "1") {
+  clear_calls();
+  s_12a = root + "/s_12a.lms";
+  write_file(s_12a, "import \"" + schema_tl + "\";\nr = tl.put({value: \"sleep_test\"});\nprintln(\"STATUS:\" + r.status + \",SLEPT:\" + str(r.result.slept));\n");
+  r_12a = run_with_tool(LMSCRIPT_BIN, false, [s_12a], ["FAKE_MODE=sleep_65"], 120000);
+  record(RESULTS, "long-running (65 s) tool is not cut off by timeout",
+         r_12a.code == 0 && contains(r_12a.stdout, "STATUS:ok,SLEPT:65"),
+         "stdout=" + r_12a.stdout + " stderr=" + r_12a.stderr);
+} else {
+  record(RESULTS, "long-running (65 s) tool is not cut off by timeout", true, "skipped in fault/fast mode");
+}
+
+# ============================================================================
+# Section 13: run_script child engine inheritance
+# ============================================================================
+
+child_script = root + "/child_schema.lms";
+write_file(child_script, "import \"" + schema_tl + "\";\nr = tl.put({value: \"child_call\"});\nprintln(\"CHILD_STATUS:\" + r.status);\n");
+
+parent_script = root + "/parent_schema.lms";
+write_file(parent_script, "res = run_script(\"" + child_script + "\");\nprintln(\"PARENT_SUCCESS:\" + str(res.success));\nprintln(\"CHILD_OUT:\" + res.stdout);\n");
+
+clear_calls();
+r_13_lms = run_with_tool(LMSCRIPT_BIN, false, [parent_script], [], 60000);
+record(RESULTS, "run_script child inherits schema imports on lmscript",
+       r_13_lms.code == 0 && contains(r_13_lms.stdout, "PARENT_SUCCESS:true") &&
+       contains(r_13_lms.stdout, "CHILD_STATUS:ok"),
+       "stdout=" + r_13_lms.stdout + " stderr=" + r_13_lms.stderr);
+
+clear_calls();
+r_13_ctl = run_with_tool(LMCTL_BIN, true, [parent_script], [], 60000);
+record(RESULTS, "run_script child inherits schema imports on lmctl script",
+       r_13_ctl.code == 0 && contains(r_13_ctl.stdout, "PARENT_SUCCESS:true") &&
+       contains(r_13_ctl.stdout, "CHILD_STATUS:ok"),
+       "stdout=" + r_13_ctl.stdout + " stderr=" + r_13_ctl.stderr);
+
+# ============================================================================
+# Section 14: Frontend agreement between lmscript and lmctl script
+# ============================================================================
+
+clear_calls();
+s_parity = root + "/parity.lms";
+write_file(s_parity, "import \"" + schema_tl + "\";\nr1 = tl.put({value: \"p1\"});\nr2 = tl.lm_read({path: \".\", mode: \"a\"});\nprintln(\"R1:\" + r1.status + \" R2:\" + r2.status);\n");
+r_p_lms = run_with_tool(LMSCRIPT_BIN, false, [s_parity], [], 60000);
+r_p_ctl = run_with_tool(LMCTL_BIN, true, [s_parity], [], 60000);
+same(RESULTS, "lmscript and lmctl script produce identical output", r_p_lms.stdout, r_p_ctl.stdout);
+
+# ============================================================================
+# Section 15: Help command introspection
+# ============================================================================
+
+r_help = run_with_tool(LMSCRIPT_BIN, false, ["help", schema_tl], [], 60000);
+record(RESULTS, "lmscript help prints schema namespace and operations",
+       r_help.code == 0 && contains(r_help.stdout, "Schema module: tl") &&
+       contains(r_help.stdout, "tl.put(opts)") && contains(r_help.stdout, "tl.lm_read([opts])"),
+       "stdout=" + r_help.stdout + " stderr=" + r_help.stderr);
+
+# 15-ctrl. Invalid schema document causes help to exit 2 with diagnostic
+bad_schema = schemas_dir + "/bad.cli.schema.v1.json";
+write_file(bad_schema, "{\"schema\":\"invalid.tag\",\"tool\":\"tl\"}");
+r_help_ctrl = run_with_tool(LMSCRIPT_BIN, false, ["help", bad_schema], [], 60000);
+record(RESULTS, "help on invalid schema exits 2 with diagnostic (control)",
+       r_help_ctrl.code == 2 && contains(r_help_ctrl.stderr, "Invalid schema module"),
+       "code=" + str(r_help_ctrl.code) + " stderr=" + r_help_ctrl.stderr);
+
+# ============================================================================
+# Section 16: Negative control for failure detection
+# ============================================================================
+
+if (env("FAULT_SCHEMA_IMPORT", "0") == "1") {
+  record(RESULTS, "negative control: deliberate injected failure", false, "injected fault");
+}
+
+# Cleanup scratch suite directory
+system(["rm", "-rf", root], 30000);
+
+diff = summary(RESULTS);
+if (diff > 0) {
+  lm_exit(1);
+}

@@ -1,0 +1,176 @@
+{
+  "_comment": [
+    "Providers and models used by the LIVE integration tiers. Edit this file to swap a model or switch a provider",
+    "off (\"enabled\": false), e.g. after looking at `lmctl ratelimit`. Command-line overrides win over this file:",
+    "  run-staging-awsspot-candidate.sh <ver> --live --providers codex,lmplayer --model lmplayer=ollama-cloud/deepseek-v4.1-flash",
+    "Every live agent is started fresh (no resumed session).",
+    "agy: only the Gemini buckets matter; the agy 3p (third-party) bucket is never used or checked (issue 001).",
+    "requires_bin / requires_env are checked on the machine that runs the tests BEFORE anything else; a missing one",
+    "stops the run with a report line. Credentials are never printed. On the awsspot box an env value that is not in",
+    "the login environment is read from ~/.config/lmctl/live-env (mode 600, lines like: export OLLAMA_API_KEY=...).",
+    "tiers: which suites use a provider. \"live\" = live.lms, prompt.lms, merged-api-live, lmctl-cron-test, lmplayer-live, pref-overlay-live; \"smoke\" = tests/provider-smoke.mjs (seed, ping, three-turn sum). Default: both.",
+    "model \"\" means: do not pass a model, the provider uses its own default (copilot, opencode, kimi, hermes, miniplayer, muse, pi). tier \"periodic\" = cheap enough for the hourly check (kimi has a scarce weekly quota and copilot bills premium requests, so both are smoke-only).",
+    "Ollama Cloud (OLLAMA_API_KEY) serves lmplayer, opencode, pi and hermes (model names differ per tool: lmplayer/opencode \"ollama-cloud/<m>\", hermes \"ollama-cloud:<m>\", pi \"ollama-cloud/<m>\" via a custom provider in ~/.pi/agent/models.json). copilot uses gpt-5-mini. No model at all (\"\") = provider default.",
+    "cron_model is the model token the lmctl-cron-test suite passes to `lmctl cron create --model` (only codex and agy are supported there).",
+    "observed_model: the name a session is expected to REPORT when it differs from the declared model string by convention (lmplayer/Ollama strips its \"ollama-cloud/\" prefix). billing \"credit\": the provider draws from a flat-credit plan, not per-token billing, so no source-qualified price route is expected -- the live comparison pins that unpriced state instead of reporting a differ (mono 009)."
+  ],
+  "providers": {
+    "codex": {
+      "enabled": true,
+      "model": "gpt-6-luna",
+      "cron_model": "gpt-6-luna",
+      "requires_bin": "codex",
+      "quota_check": "ratelimit",
+      "tiers": [
+        "live",
+        "smoke",
+        "periodic"
+      ]
+    },
+    "agy": {
+      "enabled": true,
+      "model": "gemini-3.8-flash-medium",
+      "cron_model": "gemini-3.8-flash-medium",
+      "requires_bin": "agy",
+      "quota_check": "ratelimit",
+      "tiers": [
+        "live",
+        "smoke",
+        "periodic"
+      ]
+    },
+    "lmplayer": {
+      "enabled": true,
+      "model": "ollama-cloud/deepseek-v4.1-flash",
+      "requires_bin": "lmplayer",
+      "requires_env": [
+        "OLLAMA_API_KEY"
+      ],
+      "quota_check": "none",
+      "tiers": [
+        "live",
+        "smoke",
+        "periodic"
+      ],
+      "observed_model": "deepseek-v4.1-flash",
+      "billing": "credit"
+    },
+    "claude": {
+      "enabled": true,
+      "model": "claude-haiku-5-5",
+      "requires_bin": "claude",
+      "quota_check": "none",
+      "tiers": [
+        "smoke",
+        "periodic"
+      ]
+    },
+    "qwen": {
+      "enabled": true,
+      "model": "qwen3.6-plus",
+      "requires_bin": "qwen",
+      "quota_check": "none",
+      "tiers": [
+        "smoke",
+        "periodic"
+      ]
+    },
+    "dsh": {
+      "enabled": true,
+      "model": "deepseek-flash",
+      "requires_bin": "dsh",
+      "requires_env": [
+        "DEEPSEEK_API_KEY"
+      ],
+      "quota_check": "none",
+      "tiers": [
+        "smoke",
+        "periodic"
+      ]
+    },
+    "copilot": {
+      "enabled": true,
+      "model": "gpt-5-mini",
+      "requires_bin": "copilot",
+      "quota_check": "none",
+      "tiers": [
+        "smoke"
+      ]
+    },
+    "opencode": {
+      "enabled": true,
+      "model": "ollama-cloud/deepseek-v4.1-flash",
+      "requires_bin": "opencode",
+      "quota_check": "none",
+      "tiers": [
+        "smoke",
+        "periodic"
+      ],
+      "requires_env": [
+        "OLLAMA_API_KEY"
+      ]
+    },
+    "kimi": {
+      "enabled": false,
+      "model": "",
+      "requires_bin": "kimi",
+      "quota_check": "none",
+      "tiers": [
+        "smoke"
+      ]
+    },
+    "hermes": {
+      "enabled": true,
+      "model": "ollama-cloud:deepseek-v4.1-flash",
+      "requires_bin": "hermes",
+      "quota_check": "none",
+      "tiers": [
+        "smoke",
+        "periodic"
+      ],
+      "requires_env": [
+        "OLLAMA_API_KEY"
+      ]
+    },
+    "pi": {
+      "enabled": true,
+      "model": "ollama-cloud/deepseek-v4.1-flash",
+      "requires_bin": "pi",
+      "quota_check": "none",
+      "tiers": [
+        "smoke",
+        "periodic"
+      ],
+      "requires_env": [
+        "OLLAMA_API_KEY"
+      ]
+    },
+    "muse": {
+      "enabled": false,
+      "model": "",
+      "requires_bin": "muse",
+      "quota_check": "none",
+      "tiers": [
+        "smoke",
+        "periodic"
+      ],
+      "_note": "DISABLED 2026-10-11 by the operator until the operator has evaluated muse's value; do NOT re-enable on your own (not when the quota resets). Muse works multi-turn. Seed accepted it from lmctl 0.2.157 on (issue 025); older builds reject it with \"invalid provider\". SDK: ~/repos/providers/muse-code-sdk"
+    },
+    "miniplayer": {
+      "enabled": true,
+      "model": "deepseek/deepseek-flash",
+      "requires_bin": "miniplayer",
+      "quota_check": "none",
+      "tiers": [
+        "smoke",
+        "periodic"
+      ],
+      "_note": "miniplayer cannot be seeded or resumed (lmctl: \"miniplayer does not support team session resume; use lmctl prompt --provider miniplayer\"), and has no compact. The smoke test therefore runs it anonymously (lm_agent, fresh each call): ping and a one-prompt sum.",
+      "multi_turn": false,
+      "anonymous": true,
+      "requires_env": [
+        "DEEPSEEK_API_KEY"
+      ]
+    }
+  }
+}

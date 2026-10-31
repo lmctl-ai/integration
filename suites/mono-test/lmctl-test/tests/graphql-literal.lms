@@ -1,0 +1,246 @@
+# tests/graphql-literal.lms -- Integration tests for GraphQL literals
+#
+# Covers:
+# - Valid GraphQL documents accepted (query, mutation, subscription, fragments, arguments, directives)
+# - Literal evaluates to a plain string value at runtime
+# - Schema names (unknown field/type names) are NOT validated
+# - Schema-free rules reject:
+#     - undefined fragment
+#     - unused fragment
+#     - fragment cycle
+#     - undefined variable
+#     - unused variable
+#     - duplicate operation names
+#     - duplicate fragment names
+#     - duplicate variable names
+#     - duplicate argument names
+#     - lone anonymous operation violation
+# - Syntax errors report FILE:LINE:COL inside the literal
+# - Literal form restrictions (raw triple-quoted required)
+# - Frontend agreement (LMCTL_BIN and LMSCRIPT_BIN)
+# - Negative control
+
+import "lib.lms";
+
+RESULTS = [];
+
+LMCTL_BIN = env("LMCTL_BIN", "/home/mma/repos/lmctl-mono-it-bin/lmctl-src/bin/lmctl");
+LMSCRIPT_BIN = env("LMSCRIPT_BIN", "/home/mma/repos/lmctl-mono-it-bin/lmscript/bin/lmscript");
+
+root = temp_file() + "-gql-lit-suite";
+system(["mkdir", "-p", root]);
+
+# 1. Valid documents accepted and evaluate to plain string at runtime
+q_valid = _graphql_;
+query GetUser($id: ID!, $limit: Int = 10) {
+  user(id: $id) {
+    id
+    name
+    profile: bio
+    friends(first: $limit) {
+      ...FriendFields
+    }
+  }
+}
+fragment FriendFields on User {
+  id
+  name
+}
+end _graphql_
+
+record(RESULTS, "graphql literal evaluates to a string", type(q_valid) == "string", "type=" + type(q_valid));
+record(RESULTS, "graphql literal contains query text", contains(q_valid, "GetUser"), "len=" + str(len(q_valid)));
+record(RESULTS, "graphql literal contains fragment text", contains(q_valid, "FriendFields"), "len=" + str(len(q_valid)));
+
+# Valid mutation and subscription
+m_valid = _graphql_;
+mutation UpdateUser($input: UpdateUserInput!) {
+  updateUser(input: $input) {
+    clientMutationId
+    user {
+      id
+    }
+  }
+}
+end _graphql_
+record(RESULTS, "valid mutation literal accepted as string", type(m_valid) == "string", "type=" + type(m_valid));
+
+s_valid = _graphql_;
+subscription OnUserUpdate($userId: ID!) {
+  userUpdated(id: $userId) {
+    id
+    status
+  }
+}
+end _graphql_
+record(RESULTS, "valid subscription literal accepted as string", type(s_valid) == "string", "type=" + type(s_valid));
+
+# Valid lone anonymous operation
+anon_valid = _graphql_;
+{
+  viewer {
+    login
+  }
+}
+end _graphql_
+record(RESULTS, "valid lone anonymous operation accepted as string", type(anon_valid) == "string", "type=" + type(anon_valid));
+
+# Valid fragment-only document (reusable modules)
+frag_only = _graphql_;
+fragment SharedProfile on Account {
+  email
+  avatarUrl
+}
+end _graphql_
+record(RESULTS, "valid fragment-only document accepted as string", type(frag_only) == "string", "type=" + type(frag_only));
+
+# 2. Schema names (unknown field / type names) are NOT validated
+q_unknown_schema = _graphql_;
+query UnknownSchemaTest {
+  completely_nonexistent_field_12345 {
+    deeply_nested_fake_type(param: "any") {
+      subfield_abc
+    }
+  }
+}
+end _graphql_
+record(RESULTS, "unknown schema field and type names are accepted without validation",
+       type(q_unknown_schema) == "string" && contains(q_unknown_schema, "completely_nonexistent_field_12345"),
+       "type=" + type(q_unknown_schema));
+
+# Helper to check schema-free rule rejections
+fn test_gql_rejection(label, gql_content, expected_diagnostic) {
+  test_file = root + "/test_" + label + ".lms";
+  write_file(test_file, "q = _graphql_;\n" + gql_content + "\nend _graphql_\n");
+  r_lms = system([LMSCRIPT_BIN, test_file]);
+  lms_ok = (r_lms.code == 2 && contains(r_lms.stderr, expected_diagnostic));
+  record(RESULTS, "lmscript rejects " + label, lms_ok,
+         "code=" + str(r_lms.code) + " err=" + r_lms.stderr);
+
+  r_ctl = system([LMCTL_BIN, "script", test_file]);
+  ctl_ok = (r_ctl.code == 2 && contains(r_ctl.stderr, expected_diagnostic));
+  record(RESULTS, "lmctl script rejects " + label, ctl_ok,
+         "code=" + str(r_ctl.code) + " err=" + r_ctl.stderr);
+}
+
+# 3. Schema-free rules rejected
+# 3A. Undefined fragment
+test_gql_rejection("undefined_fragment",
+  "query Q { user { ...MissingFrag } }",
+  "GraphQL: Undefined fragment MissingFrag");
+
+# 3B. Unused fragment
+test_gql_rejection("unused_fragment",
+  "query Q { user { name } } fragment UnusedFrag on User { name }",
+  "GraphQL: Unused fragment UnusedFrag");
+
+# 3C. Fragment cycle
+test_gql_rejection("fragment_cycle",
+  "query Q { user { ...A } } fragment A on User { ...B } fragment B on User { ...A }",
+  "GraphQL: Fragment cycle: A -> B -> A");
+
+# 3D. Undefined variable
+test_gql_rejection("undefined_variable",
+  "query Q { user(id: $undefVar) { name } }",
+  "GraphQL: Undefined variable $undefVar in operation Q");
+
+# 3E. Unused variable
+test_gql_rejection("unused_variable",
+  "query Q($unusedVar: String) { user { name } }",
+  "GraphQL: Unused variable $unusedVar in operation Q");
+
+# 3F. Duplicate operation names
+test_gql_rejection("duplicate_operation",
+  "query Foo { user { name } } query Foo { user { email } }",
+  "GraphQL: Duplicate operation Foo");
+
+# 3G. Duplicate fragment names
+test_gql_rejection("duplicate_fragment",
+  "query Q { user { ...F } } fragment F on User { name } fragment F on User { email }",
+  "GraphQL: Duplicate fragment F");
+
+# 3H. Duplicate variable names
+test_gql_rejection("duplicate_variable",
+  "query Q($id: ID!, $id: String) { user(id: $id) { name } }",
+  "GraphQL: Duplicate variable id");
+
+# 3I. Duplicate argument names
+test_gql_rejection("duplicate_argument",
+  "query Q { user(id: 1, id: 2) { name } }",
+  "GraphQL: Duplicate argument id");
+
+# 3J. Lone anonymous operation violation
+test_gql_rejection("lone_anonymous_operation",
+  "{ user { name } } query Second { user { email } }",
+  "GraphQL: Anonymous operation must be the only operation");
+
+# 4. Syntax errors report exact FILE:LINE:COL inside the literal
+syntax_file = root + "/test_syntax_location.lms";
+write_file(syntax_file,
+  "# line 1\n" +
+  "# line 2\n" +
+  "q = _graphql_;\n" +
+  "query Q {\n" +
+  "  user {\n" +
+  "    name\n" +
+  "    invalid @@ character\n" +
+  "  }\n" +
+  "}\n" +
+  "end _graphql_\n");
+
+r_syntax_lms = system([LMSCRIPT_BIN, syntax_file]);
+record(RESULTS, "syntax error reports FILE:LINE:COL on lmscript",
+       r_syntax_lms.code == 2 && contains(r_syntax_lms.stderr, "test_syntax_location.lms:7:") && contains(r_syntax_lms.stderr, "GraphQL: Expected Name, found \"@\""),
+       "code=" + str(r_syntax_lms.code) + " err=" + r_syntax_lms.stderr);
+
+r_syntax_ctl = system([LMCTL_BIN, "script", syntax_file]);
+record(RESULTS, "syntax error reports FILE:LINE:COL on lmctl script",
+       r_syntax_ctl.code == 2 && contains(r_syntax_ctl.stderr, "test_syntax_location.lms:7:") && contains(r_syntax_ctl.stderr, "GraphQL: Expected Name, found \"@\""),
+       "code=" + str(r_syntax_ctl.code) + " err=" + r_syntax_ctl.stderr);
+
+# 5. Removed graphql"""..."""/short/combined forms are refused with a hint naming the _graphql_ marker
+single_quote_file = root + "/test_single_quote.lms";
+write_file(single_quote_file, "q = graphql\"query { user { name } }\";\n");
+r_sq = system([LMSCRIPT_BIN, single_quote_file]);
+record(RESULTS, "single quoted graphql literal refused",
+       r_sq.code == 2 && contains(r_sq.stderr, "literals were removed; write the statement with the _graphql_ marker"),
+       "code=" + str(r_sq.code) + " err=" + r_sq.stderr);
+
+prefix_file = root + "/test_prefix.lms";
+write_file(prefix_file, "q = rgraphql\"\"\"query { user { name } }\"\"\";\n");
+r_pre = system([LMSCRIPT_BIN, prefix_file]);
+record(RESULTS, "combined prefix rgraphql refused",
+       r_pre.code == 2 && contains(r_pre.stderr, "literals were removed; write the statement with the _graphql_ marker"),
+       "code=" + str(r_pre.code) + " err=" + r_pre.stderr);
+
+# 6. Frontend agreement: valid query string parity across frontends
+parity_file = root + "/test_parity.lms";
+write_file(parity_file,
+  "q = _graphql_;\n" +
+  "query ViewerQuery {\n" +
+  "  viewer {\n" +
+  "    login\n" +
+  "    name\n" +
+  "  }\n" +
+  "}\n" +
+  "end _graphql_\n" +
+  "println(\"LEN:\" + str(len(q)));\n" +
+  "println(\"TYPE:\" + type(q));\n");
+
+r_p_lms = system([LMSCRIPT_BIN, parity_file]);
+r_p_ctl = system([LMCTL_BIN, "script", parity_file]);
+same(RESULTS, "frontend parity: valid graphql literal outputs match across frontends",
+     r_p_lms.stdout, r_p_ctl.stdout);
+
+# 7. Negative control
+if (env("FAULT_GRAPHQL", "0") == "1") {
+  record(RESULTS, "negative control: deliberate injected failure", false, "injected fault");
+}
+
+# Cleanup scratch suite directory
+system(["rm", "-rf", root]);
+
+diff = summary(RESULTS);
+if (diff > 0) {
+  lm_exit(1);
+}

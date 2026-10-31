@@ -15,7 +15,7 @@ ok = lm_prompt("team.lmctl", "Coder", "ping");
 failed = failed + verdict("ok reply", ok.status == "ok" && ok.reply == "pong", "status=" + str(ok.status) + " reply=" + str(ok.reply));
 
 bad = lm_prompt("team.lmctl", "Coder", "please fail me now");
-failed = failed + verdict("scripted error", bad.status != "ok" && contains(str(bad.error), "mock provider exploded"), "status=" + str(bad.status) + " error=" + str(bad.error));
+failed = failed + verdict("scripted error", bad.status != "ok" && contains(str(bad.error), "mock provider exploded"), "status=" + str(bad.status) + " error=" + str(bad.error) + " (expected error text: mock provider exploded)");
 
 empty = lm_prompt("team.lmctl", "Coder", "empty please");
 // A provider can answer status "ok" with an empty reply; that is a failure the script must see.

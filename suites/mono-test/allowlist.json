@@ -1,0 +1,58 @@
+[
+  {
+    "suite": "offline-commands",
+    "match": "FAIL B1 pinned install",
+    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
+    "owner": "lmcode-team Lead (release pipeline)",
+    "expires": "2026-11-14"
+  },
+  {
+    "suite": "offline-commands",
+    "match": "FAIL B2 pinned cache hit",
+    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
+    "owner": "lmcode-team Lead (release pipeline)",
+    "expires": "2026-11-14"
+  },
+  {
+    "suite": "offline-commands",
+    "match": "FAIL B3 a tampered cached binary",
+    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
+    "owner": "lmcode-team Lead (release pipeline)",
+    "expires": "2026-11-14"
+  },
+  {
+    "suite": "offline-commands",
+    "match": "FAIL B4 SHA-256 mismatch",
+    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
+    "owner": "lmcode-team Lead (release pipeline)",
+    "expires": "2026-11-14"
+  },
+  {
+    "suite": "offline-commands",
+    "match": "FAIL B5 no checksum anywhere",
+    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
+    "owner": "lmcode-team Lead (release pipeline)",
+    "expires": "2026-11-14"
+  },
+  {
+    "suite": "offline-commands",
+    "match": "FAIL B6 @latest",
+    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
+    "owner": "lmcode-team Lead (release pipeline)",
+    "expires": "2026-11-14"
+  },
+  {
+    "suite": "native-git",
+    "match": "real run with import evaluates native-git: evaluated=false",
+    "reason": "the native-git suite reports one differential finding on published 0.2.448 (a real run with import: evaluated=false); mono-test targets current main. Not yet analysed which side is right; the release-pipeline design says native-git is being removed, which would retire the suite.",
+    "owner": "lmcode-team Lead (release pipeline)",
+    "expires": "2026-11-14"
+  },
+  {
+    "suite": "failure-detection",
+    "match": "language docs missing",
+    "reason": "failure-detection.mjs includes a control that runs doc-examples.lms, which needs the lmscript language docs of a mono source checkout; the npm package ships none (doc-examples is classified skip-host). The control for every other suite runs.",
+    "owner": "lmcode-team Lead (release pipeline)",
+    "expires": "2026-11-14"
+  }
+]

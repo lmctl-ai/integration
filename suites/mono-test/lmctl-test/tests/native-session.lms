@@ -1,0 +1,71 @@
+# Offline native-session assertions live here; the helper only supplies fixtures
+# and owned process transport. Both product frontends execute the same scripts.
+import "lib.lms";
+RESULTS=[];
+HELPER=env("LMCTL_TEST_ROOT",trim(system(["pwd"],30000).stdout))+"/tests/native-session-fixture.mjs";
+fn check(name,ok,detail){return record(RESULTS,name,ok,detail);}
+fn finish(){bad=0;for(item in RESULTS){if(!item.ok){bad=bad+1;}}println(str(len(RESULTS))+" assertions: "+str(len(RESULTS)-bad)+" pass, "+str(bad)+" fail");if(bad>0){lm_exit(1);}}
+fn transport(argv){r=system(concat(["node",HELPER],argv),180000);require(r.code==0,"fixture transport: "+r.stderr);return json_parse(r.stdout);}
+fn member(meta){return "{provider:"+json_stringify(meta.provider)+",sessionid:"+json_stringify(meta.sid)+",sessiondir:"+json_stringify(meta.workspace)+"}";}
+fn script(meta,name,source){path=meta.root+"/"+name+".lms";write_file(path,source);return path;}
+fn process_ok(name,r,stdout){check(name+" exit",r.code==0,json_stringify(r));check(name+" stdout",r.stdout==stdout,r.stdout);check(name+" stderr",r.stderr=="",r.stderr);}
+fn done(r){lines=split(trim(r.stdout),"\n");return json_parse(lines[len(lines)-1]);}
+fn turns(name,evidence,expected){process_ok(name+" usage command",evidence.usage,json_stringify(json_parse(evidence.usage.stdout))+"\n");u=json_parse(evidence.usage.stdout);check(name+" stored usage rows",u.total.turns==expected,json_stringify(u));}
+fn cleanup(meta){r=transport(["remove",meta.root]);check("scratch removed",r.removed,"scratch retained");}
+
+if(contains(args,"--negative-control")){control=system(["node","-e","process.exit(0)"],30000);check("negative control exit checker",control.code==9,"deliberately expected exit 9: "+json_stringify(control));finish();lm_exit(1);}
+
+for(front in ["lmctl","lmscript"]){
+ m=transport(["prepare","mock"]);
+ removed=system(["rm",m.team],30000);process_ok(front+" remove owner fixture",removed,"");
+ check(front+" native member needs no teamfile",!file_exists(m.team),m.team);
+ p=script(m,"dependent","h=lm_batch_open("+member(m)+");a=lm_batch_turn(h,\"ONE\");b=lm_batch_turn(h,a.reply);lm_batch_close(h);println(json_stringify([a,b]));");
+ e=transport(["run",m.root,front,p]);
+ check(front+" dependent exit",e.result.code==0,json_stringify(e.result));check(front+" dependent stderr",e.result.stderr=="",e.result.stderr);
+ replies=json_parse(e.result.stdout);
+ expected=[{status:"ok",reply:"FIRST_REPLY",error:null,message_id:"msg_tcl_1",team_chat_log_id:1},{status:"ok",reply:"SECOND_REPLY",error:null,message_id:"msg_tcl_2",team_chat_log_id:2}];
+ check(front+" exact dependent stdout",e.result.stdout==json_stringify(expected)+"\n",e.result.stdout);
+ check(front+" dependent stdout",replies[0].status=="ok"&&replies[0].reply=="FIRST_REPLY"&&replies[1].status=="ok"&&replies[1].reply=="SECOND_REPLY",e.result.stdout);
+ check(front+" one transcript id per turn",replies[0].team_chat_log_id==1&&replies[1].team_chat_log_id==2,e.result.stdout);
+ check(front+" accepted transcript streams",replies[0].message_id=="msg_tcl_1"&&replies[1].message_id=="msg_tcl_2",e.result.stdout);
+ turns(front+" dependent",e,2);
+ messages=get(e.store.sessions,m.sid,null).messages;
+ check(front+" exact provider effects",len(messages)==4&&messages[0].content=="ONE"&&messages[1].content=="FIRST_REPLY"&&messages[2].content=="FIRST_REPLY"&&messages[3].content=="SECOND_REPLY",json_stringify(messages));
+ reopen=script(m,"reopen","h=lm_batch_open("+member(m)+");println(h==null);if(h!=null){lm_batch_close(h);}");probe=transport(["run",m.root,front,reopen]);process_ok(front+" unowned explicit close unlocks",probe.result,"false\n");check(front+" no manufactured teamfile",!file_exists(m.team),m.team);cleanup(m);
+
+ for(ending in ["scope","error","exit"]){
+  m=transport(["prepare","mock"]);source="";
+  if(ending=="scope"){source="fn owned(){h=lm_batch_open("+member(m)+");}owned();println(\"CLOSED\");";}
+  else if(ending=="error"){source="h=lm_batch_open("+member(m)+");require(false,\"EXPECTED_NATIVE_ERROR\");";}
+  else{source="h=lm_batch_open("+member(m)+");exit(7);";}
+  p=script(m,ending,source);e=transport(["run",m.root,front,p]);
+  if(ending=="scope"){process_ok(front+" scope",e.result,"CLOSED\n");}
+  else if(ending=="exit"){check(front+" exit7 code",e.result.code==7,json_stringify(e.result));check(front+" exit7 output",e.result.stdout==""&&e.result.stderr=="",json_stringify(e.result));}
+  else{check(front+" error exit",e.result.code==1,json_stringify(e.result));check(front+" error output",e.result.stdout==""&&e.result.stderr=="error: EXPECTED_NATIVE_ERROR\n\n=== LMScript Error Summary (1 error) ===\n  1. EXPECTED_NATIVE_ERROR\n==========================================\n",json_stringify(e.result));}
+  turns(front+" "+ending,e,0);probe=transport(["probe",m.root]);check(front+" "+ending+" unlocks",probe.result.code==0&&done(probe.result).status=="ok"&&done(probe.result).replyText=="UNLOCKED"&&probe.result.stderr=="Lead: turn running; this can take minutes\n",json_stringify(probe.result));cleanup(m);
+ }
+
+ m=transport(["prepare","mock"]);holder=script(m,"holder","h=lm_batch_open("+member(m)+");println(\"READY\");sleep_ms(300000);");
+ contender=script(m,"contender","h=lm_batch_open("+member(m)+");println(h==null);if(h!=null){lm_batch_close(h);}");
+ e=transport(["held",m.root,front,holder,contender]);
+ check(front+" second script busy exit",e.second.code==0,json_stringify(e.second));check(front+" second script busy stdout",e.second.stdout=="true\n",e.second.stdout);
+ check(front+" second script busy stderr",starts_with(e.second.stderr,"Lead is servicing operator (")&&ends_with(e.second.stderr," — wait and retry\n"),e.second.stderr);
+ check(front+" agent prompt busy",e.agent.code==1&&json_parse(e.agent.stdout).status=="busy"&&e.agent.stderr=="Lead: turn running; this can take minutes\n",json_stringify(e.agent));
+ check(front+" SIGTERM owned holder",e.pid>0&&e.holder.code==143&&e.holder.stdout=="READY\n"&&e.holder.stderr=="",json_stringify(e.holder));
+ process_ok(front+" SIGTERM unlocks",e.reopened,"false\n");turns(front+" busy",e,0);cleanup(m);
+
+ m=transport(["prepare","mock"]);p=script(m,"missing","h=lm_batch_open({provider:\"ClaudeMock\",sessionid:\"missing-native-id\"});");e=transport(["run",m.root,front,p]);
+ check(front+" nonexistent code",e.result.code==1,json_stringify(e.result));check(front+" nonexistent output",e.result.stdout==""&&contains(e.result.stderr,"Native session was not found"),json_stringify(e.result));
+ check(front+" nonexistent provider effects",len(get(e.store.sessions,m.sid,null).messages)==0&&len(e.trace)==0,json_stringify(e));turns(front+" nonexistent",e,0);cleanup(m);
+
+ m=transport(["prepare","mock"]);p=script(m,"dry","h=lm_batch_open("+member(m)+");lm_batch_turn(h,\"ONE\");lm_batch_close(h);");e=transport(["dry",m.root,front,p]);
+ check(front+" dry result",e.result.code==0&&e.result.stderr==""&&json_parse(e.result.stdout).status=="complete",json_stringify(e.result));
+ check(front+" dry no database or lease",!e.before&&!e.databaseExists,json_stringify(e));check(front+" dry no provider effects",len(get(e.store.sessions,m.sid,null).messages)==0&&len(e.trace)==0,json_stringify(e));cleanup(m);
+
+ m=transport(["prepare","agy"]);p=script(m,"oneshot","h=lm_batch_open("+member(m)+");a=lm_batch_turn(h,\"one\");b=lm_batch_turn(h,a.reply);lm_batch_close(h);println(json_stringify([a.reply,b.reply]));");e=transport(["run",m.root,front,p]);
+ process_ok(front+" one-shot",e.result,"[\"reply:one\",\"reply:reply:one\"]\n");spawns=[];for(row in e.trace){if(get(row,"event","")=="spawn"){push(spawns,row.pid);}}
+ check(front+" one-shot separate processes",len(spawns)==2&&spawns[0]!=spawns[1],json_stringify(e.trace));
+ prompts=[];for(row in e.trace){if(get(row,"event","")=="prompt"){push(prompts,row);}}
+ check(front+" one-shot same native id and dependent prompts",len(prompts)==2&&prompts[0].sessionId==m.sid&&prompts[1].sessionId==m.sid&&prompts[0].prompt=="one"&&prompts[1].prompt=="reply:one",json_stringify(prompts));turns(front+" one-shot",e,2);cleanup(m);
+}
+finish();

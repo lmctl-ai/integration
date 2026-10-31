@@ -1,0 +1,10 @@
+# mode  expected-status  expected-error_class  expected-requests-served-by-the-mock
+# The class is lmctl's error_class (never vendor wording). "-" means no class. Counts encode miniplayer's retry
+# policy at the pinned commit (3 attempts on throttle/unavailable, none on auth or malformed JSON): a change there is
+# a real behaviour change to look at, not noise.
+ok            ok     -                   1
+retry         ok     -                   2
+unauthorized  error  auth_required       1
+rate-limit    error  upstream_throttled  3
+server-error  error  unknown             3
+bad-json      error  unknown             1

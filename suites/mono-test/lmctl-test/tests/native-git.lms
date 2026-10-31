@@ -1,0 +1,292 @@
+# tests/native-git.lms -- Integration tests for native:git module
+#
+# Covers:
+# - import "native:git"
+# - status/log with limit/branch/rev_parse/remotes against real scratch git repositories
+# - clean, modified, untracked, renamed, unicode & spaces in paths
+# - detached HEAD, empty repo (unborn branch), merge conflict, submodule
+# - git missing from PATH loud error
+# - unknown module native:nope error
+# - use before import
+# - namespace collision
+# - lazy activation proof
+# - child via run_script importing native:git
+# - --check and --dry-run without activating
+# - two front-ends agreement (LMCTL_BIN and LMSCRIPT_BIN)
+# - negative control
+
+import "lib.lms";
+import "native:git";
+
+RESULTS = [];
+
+LMCTL_BIN = env("LMCTL_BIN", "/home/mma/repos/lmctl-mono-it-bin/lmctl-src/bin/lmctl");
+LMSCRIPT_BIN = env("LMSCRIPT_BIN", "/home/mma/repos/lmctl-mono-it-bin/lmscript/bin/lmscript");
+NODE_BIN = env("NODE_BIN", "node");
+
+root = temp_file() + "-native-git-suite";
+repo = root + "/repo";
+system(["mkdir", "-p", repo]);
+
+# Configure git environment safely inside scratch repo
+system(["git", "-C", repo, "init", "-b", "main"]);
+system(["git", "-C", repo, "config", "user.name", "Test Author"]);
+system(["git", "-C", repo, "config", "user.email", "test@example.invalid"]);
+
+# 1. Empty repository (unborn HEAD)
+st_empty = git.status(repo);
+record(RESULTS, "empty repo status unborn is true", st_empty.unborn == true, "unborn=" + str(st_empty.unborn));
+record(RESULTS, "empty repo branch is main", git.branch(repo) == "main", "branch=" + str(git.branch(repo)));
+logs_empty = git.log(repo, 10);
+record(RESULTS, "empty repo log is empty", len(logs_empty) == 0, "len=" + str(len(logs_empty)));
+rems_empty = git.remotes(repo);
+record(RESULTS, "empty repo remotes is empty", len(rems_empty) == 0, "len=" + str(len(rems_empty)));
+
+# 2. First commit with unicode and spaces in filename and commit message
+file_space = repo + "/path with spaces 世界.txt";
+write_file(file_space, "initial content\n");
+system(["git", "-C", repo, "add", "-A"]);
+system(["git", "-C", repo, "commit", "-m", "initial commit: space 世界"]);
+
+head_sha = trim(str(get(system(["git", "-C", repo, "rev-parse", "HEAD"]), "stdout", "")));
+rev = git.rev_parse(repo, "HEAD");
+same(RESULTS, "rev_parse HEAD matches git rev-parse", head_sha, rev);
+
+st_clean = git.status(repo);
+record(RESULTS, "clean repo status after commit",
+       st_clean.unborn == false && len(st_clean.staged) == 0 && len(st_clean.unstaged) == 0 && len(st_clean.untracked) == 0,
+       "st=" + json_stringify(st_clean));
+
+logs = git.log(repo, 5);
+record(RESULTS, "log returns 1 commit", len(logs) == 1, "len=" + str(len(logs)));
+same(RESULTS, "log commit sha matches", head_sha, logs[0].sha);
+same(RESULTS, "log commit subject matches", "initial commit: space 世界", logs[0].subject);
+same(RESULTS, "log commit author matches", "Test Author", logs[0].author);
+record(RESULTS, "log commit date is ISO format", contains(logs[0].date, "T"), "date=" + str(logs[0].date));
+
+# Log limits
+logs_zero = git.log(repo, 0);
+record(RESULTS, "log with limit 0 returns empty array", len(logs_zero) == 0, "len=" + str(len(logs_zero)));
+
+# 3. Modified tracked file
+append_file(file_space, "modified line\n");
+st_mod = git.status(repo);
+record(RESULTS, "modified file appears in unstaged", contains(st_mod.unstaged, "path with spaces 世界.txt"), "unstaged=" + json_stringify(st_mod.unstaged));
+
+# 4. Untracked file with unicode and spaces
+file_untracked = repo + "/untracked file 🚀.txt";
+write_file(file_untracked, "untracked content\n");
+st_untr = git.status(repo);
+record(RESULTS, "untracked file appears in untracked", contains(st_untr.untracked, "untracked file 🚀.txt"), "untracked=" + json_stringify(st_untr.untracked));
+
+# 5. Staged file
+system(["git", "-C", repo, "add", "untracked file 🚀.txt"]);
+st_staged = git.status(repo);
+record(RESULTS, "added file appears in staged", contains(st_staged.staged, "untracked file 🚀.txt"), "staged=" + json_stringify(st_staged));
+system(["git", "-C", repo, "commit", "-m", "second commit"]);
+
+# 6. Renamed file
+system(["git", "-C", repo, "mv", "path with spaces 世界.txt", "renamed 世界.txt"]);
+st_renamed = git.status(repo);
+record(RESULTS, "renamed file detected in status",
+       len(st_renamed.renamed) == 1 && st_renamed.renamed[0].from == "path with spaces 世界.txt" && st_renamed.renamed[0].to == "renamed 世界.txt",
+       "renamed=" + json_stringify(st_renamed.renamed));
+system(["git", "-C", repo, "commit", "-m", "rename commit"]);
+
+# 7. Remotes
+system(["git", "-C", repo, "remote", "add", "origin", "https://example.invalid/repo.git"]);
+rems = git.remotes(repo);
+record(RESULTS, "remotes returns configured origin",
+       len(rems) == 1 && rems[0].name == "origin" && rems[0].url == "https://example.invalid/repo.git",
+       "remotes=" + json_stringify(rems));
+
+# 8. Detached HEAD
+system(["git", "-C", repo, "checkout", "--detach"]);
+br_detached = git.branch(repo);
+same(RESULTS, "detached HEAD branch is null", null, br_detached);
+st_detached = git.status(repo);
+record(RESULTS, "status reports detached HEAD", st_detached.detached == true, "detached=" + str(st_detached.detached));
+system(["git", "-C", repo, "checkout", "main"]);
+same(RESULTS, "branch restored to main", "main", git.branch(repo));
+
+# 9. Merge conflict state
+system(["git", "-C", repo, "checkout", "-b", "feature-conflict"]);
+file_conflict = repo + "/conflict.txt";
+write_file(file_conflict, "feature branch content\n");
+system(["git", "-C", repo, "add", "conflict.txt"]);
+system(["git", "-C", repo, "commit", "-m", "conflict commit on feature"]);
+
+system(["git", "-C", repo, "checkout", "main"]);
+write_file(file_conflict, "main branch content\n");
+system(["git", "-C", repo, "add", "conflict.txt"]);
+system(["git", "-C", repo, "commit", "-m", "conflict commit on main"]);
+
+system(["git", "-C", repo, "merge", "feature-conflict"]);
+st_conflict = git.status(repo);
+record(RESULTS, "conflicted file recorded in conflicted array",
+       contains(st_conflict.conflicted, "conflict.txt"),
+       "conflicted=" + json_stringify(st_conflict.conflicted));
+system(["git", "-C", repo, "merge", "--abort"]);
+
+# 10. Submodule
+sub_dir = root + "/subrepo";
+system(["mkdir", "-p", sub_dir]);
+system(["git", "-C", sub_dir, "init", "-b", "main"]);
+system(["git", "-C", sub_dir, "config", "user.name", "Sub Author"]);
+system(["git", "-C", sub_dir, "config", "user.email", "sub@example.invalid"]);
+write_file(sub_dir + "/subfile.txt", "sub file content\n");
+system(["git", "-C", sub_dir, "add", "."]);
+system(["git", "-C", sub_dir, "commit", "-m", "sub initial commit"]);
+
+system(["git", "-C", repo, "-c", "protocol.file.allow=always", "submodule", "add", sub_dir, "mysub"]);
+st_sub = git.status(repo);
+record(RESULTS, "submodule recognized in status",
+       len(st_sub.submodules) >= 1 && st_sub.submodules[0].path == "mysub",
+       "submodules=" + json_stringify(st_sub.submodules));
+
+# 11. Git missing from PATH gives a loud error
+script_missing_git = root + "/test_missing_git.lms";
+write_file(script_missing_git, "import \"native:git\";\nst = git.status(\"" + repo + "\");\n");
+r_no_git = system([NODE_BIN, "-e",
+  "const {spawnSync}=require('child_process');\n" +
+  "const r=spawnSync(process.argv[1], [process.argv[2]], {\n" +
+  "  env: {PATH: '" + env("NODE_DIR", "/usr/bin") + "', HOME: '/tmp'},\n" +
+  "  encoding: 'utf8'\n" +
+  "});\n" +
+  "process.stdout.write(JSON.stringify({code: r.status, stderr: r.stderr}));",
+  LMSCRIPT_BIN, script_missing_git]);
+
+res_no_git = json_parse(r_no_git.stdout);
+record(RESULTS, "git missing from PATH gives loud error",
+       res_no_git.code != 0 && contains(res_no_git.stderr, "ENOENT"),
+       "code=" + str(res_no_git.code) + " err=" + res_no_git.stderr);
+
+# 12. Unknown module native:nope error
+script_nope = root + "/test_nope.lms";
+write_file(script_nope, "import \"native:nope\";\n");
+r_nope_lms = system([LMSCRIPT_BIN, script_nope]);
+record(RESULTS, "native:nope rejected by lmscript with exit 2",
+       r_nope_lms.code == 2 && contains(r_nope_lms.stderr, "Unknown native module native:nope"),
+       "code=" + str(r_nope_lms.code) + " err=" + r_nope_lms.stderr);
+
+r_nope_ctl = system([LMCTL_BIN, "script", script_nope]);
+record(RESULTS, "native:nope rejected by lmctl with exit 2",
+       r_nope_ctl.code == 2 && contains(r_nope_ctl.stderr, "Unknown native module native:nope"),
+       "code=" + str(r_nope_ctl.code) + " err=" + r_nope_ctl.stderr);
+
+# 13. Use before import
+script_ubi = root + "/test_ubi.lms";
+write_file(script_ubi, "git.status(\"" + repo + "\");\nimport \"native:git\";\n");
+r_ubi = system([LMSCRIPT_BIN, script_ubi]);
+record(RESULTS, "use before import rejected with exit 2",
+       r_ubi.code == 2 && contains(r_ubi.stderr, "package git not loaded"),
+       "code=" + str(r_ubi.code) + " err=" + r_ubi.stderr);
+
+# 14. Namespace collision cases
+script_coll = root + "/test_coll.lms";
+write_file(script_coll, "git = 1;\nimport \"native:git\";\n");
+r_coll = system([LMSCRIPT_BIN, script_coll]);
+record(RESULTS, "variable namespace collision rejected with exit 2",
+       r_coll.code == 2 && contains(r_coll.stderr, "collision"),
+       "code=" + str(r_coll.code) + " err=" + r_coll.stderr);
+
+# 15. Lazy activation proof (a script without import never evaluates module; --check/--dry-run never evaluate)
+loader_script = root + "/test_lazy_loader.mjs";
+eval_marker = root + "/evaluated_marker.txt";
+target_dist = trim(system(["dirname", trim(system(["dirname", LMSCRIPT_BIN]).stdout)]).stdout) + "/dist/native-git.js";
+
+write_file(loader_script,
+  "import {existsSync, unlinkSync, writeFileSync} from 'node:fs';\n" +
+  "import {spawnSync} from 'node:child_process';\n" +
+  "\n" +
+  "const [nodeBin, lmscriptBin, marker, target] = process.argv.slice(2);\n" +
+  "const loaderFile = marker + '.loader.mjs';\n" +
+  "const targetUrl = 'file://' + target;\n" +
+  "\n" +
+  "writeFileSync(loaderFile, [\n" +
+  "  'export async function load(url, context, next) {',\n" +
+  "  '  const r = await next(url, context);',\n" +
+  "  '  if (url === ' + JSON.stringify(targetUrl) + ') {',\n" +
+  "  '    const text = typeof r.source === \"string\" ? r.source : Buffer.from(r.source).toString(\"utf8\");',\n" +
+  "  '    r.source = \"import {writeFileSync as record} from \\\\\\\"node:fs\\\\\\\"; record(\" + JSON.stringify(' + JSON.stringify(marker) + ') + \", \\\\\\\"evaluated\\\\\\\");\\\\n\" + text;',\n" +
+  "  '  }',\n" +
+  "  '  return r;',\n" +
+  "  '}',\n" +
+  "].join('\\n'));\n" +
+  "\n" +
+  "const run = (flags, src) => {\n" +
+  "  if (existsSync(marker)) unlinkSync(marker);\n" +
+  "  const r = spawnSync(nodeBin, ['--loader', loaderFile, lmscriptBin, ...flags, '-e', src], {encoding: 'utf8'});\n" +
+  "  return {status: r.status, evaluated: existsSync(marker), stderr: r.stderr};\n" +
+  "};\n" +
+  "\n" +
+  "const noImport = run([], 'println(1);');\n" +
+  "const checkMode = run(['--check'], 'import \"native:git\"; println(1);');\n" +
+  "const dryMode = run(['--dry-run'], 'import \"native:git\"; println(1);');\n" +
+  "const realMode = run(['--no-preflight'], 'import \"native:git\"; println(1);');\n" +
+  "\n" +
+  "process.stdout.write(JSON.stringify({\n" +
+  "  noImport: noImport.evaluated,\n" +
+  "  checkMode: checkMode.evaluated,\n" +
+  "  dryMode: dryMode.evaluated,\n" +
+  "  realMode: realMode.evaluated,\n" +
+  "}));\n");
+
+r_lazy = system([NODE_BIN, loader_script, NODE_BIN, LMSCRIPT_BIN, eval_marker, target_dist]);
+lazy_res = json_parse(r_lazy.stdout);
+record(RESULTS, "script without import never evaluates native-git", lazy_res.noImport == false, "evaluated=" + str(lazy_res.noImport));
+record(RESULTS, "--check with import never evaluates native-git", lazy_res.checkMode == false, "evaluated=" + str(lazy_res.checkMode));
+record(RESULTS, "--dry-run with import never evaluates native-git", lazy_res.dryMode == false, "evaluated=" + str(lazy_res.dryMode));
+record(RESULTS, "real run with import evaluates native-git", lazy_res.realMode == true, "evaluated=" + str(lazy_res.realMode));
+
+# 16. Child via run_script importing native:git works on both front-ends
+child_script = root + "/child_git.lms";
+write_file(child_script, "import \"native:git\";\nbr = git.branch(\"" + repo + "\");\nprintln(\"CHILD_BRANCH:\" + str(br));\n");
+parent_script = root + "/parent_git.lms";
+write_file(parent_script, "res = run_script(\"" + child_script + "\");\nprintln(\"PARENT_SUCCESS:\" + str(res.success));\nprintln(\"PARENT_CHILD_OUT:\" + str(res.stdout));\n");
+
+r_child_lms = system([LMSCRIPT_BIN, parent_script]);
+record(RESULTS, "child importing native:git succeeds on lmscript",
+       r_child_lms.code == 0 && contains(r_child_lms.stdout, "PARENT_SUCCESS:true") && contains(r_child_lms.stdout, "CHILD_BRANCH:main"),
+       "stdout=" + r_child_lms.stdout);
+
+r_child_ctl = system([LMCTL_BIN, "script", parent_script]);
+record(RESULTS, "child importing native:git succeeds on lmctl script",
+       r_child_ctl.code == 0 && contains(r_child_ctl.stdout, "PARENT_SUCCESS:true") && contains(r_child_ctl.stdout, "CHILD_BRANCH:main"),
+       "stdout=" + r_child_ctl.stdout);
+
+# 17. --check and --dry-run work without activating
+script_chk_dry = root + "/check_dry.lms";
+write_file(script_chk_dry, "import \"native:git\";\nst = git.status(\"" + repo + "\");\nprintln(\"CHECK_DRY_DONE\");\n");
+
+r_cd_lms_chk = system([LMSCRIPT_BIN, "--check", script_chk_dry]);
+same(RESULTS, "lmscript --check exits 0 on valid native:git script", 0, r_cd_lms_chk.code);
+
+r_cd_lms_dry = system([LMSCRIPT_BIN, "--dry-run", script_chk_dry]);
+same(RESULTS, "lmscript --dry-run exits 0 on valid native:git script", 0, r_cd_lms_dry.code);
+
+r_cd_ctl_chk = system([LMCTL_BIN, "script", "--check", script_chk_dry]);
+same(RESULTS, "lmctl script --check exits 0 on valid native:git script", 0, r_cd_ctl_chk.code);
+
+r_cd_ctl_dry = system([LMCTL_BIN, "script", "--dry-run", script_chk_dry]);
+same(RESULTS, "lmctl script --dry-run exits 0 on valid native:git script", 0, r_cd_ctl_dry.code);
+
+# 18. Frontend agreement: CLI and host function parity
+script_parity = root + "/parity.lms";
+write_file(script_parity, "import \"native:git\";\nprintln(json_stringify(git.status(\"" + repo + "\")));\n");
+r_p_lms = system([LMSCRIPT_BIN, script_parity]);
+r_p_ctl = system([LMCTL_BIN, "script", script_parity]);
+same(RESULTS, "lmscript and lmctl script produce identical git.status output", r_p_lms.stdout, r_p_ctl.stdout);
+
+# 19. Negative control
+if (env("FAULT_NATIVE_GIT", "0") == "1") {
+  record(RESULTS, "negative control: deliberate injected failure", false, "injected fault");
+}
+
+# Cleanup scratch suite directory
+system(["rm", "-rf", root]);
+
+diff = summary(RESULTS);
+if (diff > 0) {
+  lm_exit(1);
+}

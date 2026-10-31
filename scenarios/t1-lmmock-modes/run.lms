@@ -1,0 +1,23 @@
+// ARGV: mode expected-status expected-class ("-" = no class). One lm_prompt, judged on status, error_class, and (for ok)
+// a non-empty reply. Wording of errors is never matched.
+mode = ARGV[0];
+want_status = ARGV[1];
+want_class = ARGV[2];
+
+r = lm_prompt("team.lmctl", "Worker", "ping");
+got_class = str(r.get("error_class", "-"));
+if (got_class == "null") { got_class = "-"; }
+println("got: status=" + str(r.status) + " class=" + got_class + " reply=" + str(r.get("reply", "")));
+
+ok = true;
+if (want_status == "ok") {
+  if (r.status != "ok" || str(r.get("reply", "")) == "") { ok = false; }
+} else {
+  if (r.status != "error") { ok = false; }
+}
+if (got_class != want_class) { ok = false; }
+if (!ok) {
+  println("FAIL " + mode + ": expected status=" + want_status + " class=" + want_class);
+  exit(1);
+}
+println("PASS " + mode);

@@ -1,0 +1,10 @@
+# Only the exact account/model rejection is an unavailable capability.
+# Auth, transport, seed bugs and missing session IDs remain named failures.
+fn prompt_precondition(code, output, provider, model, sessionid) {
+  if (code != 0 && provider == "codex" &&
+      contains(output, "The '" + model + "' model is not supported when using Codex with a ChatGPT account.")) {
+    return "MODEL-UNAVAILABLE";
+  }
+  if (sessionid == "" || sessionid == "null" || sessionid == "?") { return "UNSEEDED-ALIAS"; }
+  return "READY";
+}

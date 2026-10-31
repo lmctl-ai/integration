@@ -1,0 +1,30 @@
+failed = 0;
+
+function verdict(name, ok, detail) {
+  if (ok) {
+    println("PASS " + name);
+    return 0;
+  }
+  println("FAIL " + name + " :: " + detail);
+  return 1;
+}
+
+ping = lm_prompt("team.lmctl", "Smoke", "ping");
+failed = failed + verdict("ping", ping.status == "ok" && ping.reply == "pong", "status=" + str(ping.status) + " reply=" + str(ping.get("reply", "-")));
+
+t1 = lm_prompt("team.lmctl", "Smoke", "the first number is 3");
+t2 = lm_prompt("team.lmctl", "Smoke", "the second number is 7");
+t3 = lm_prompt("team.lmctl", "Smoke", "what is the total");
+failed = failed + verdict("turn 1", t1.status == "ok" && t1.reply == "noted: first=3", "reply=" + str(t1.get("reply", "-")));
+failed = failed + verdict("turn 2", t2.status == "ok" && t2.reply == "noted: second=7", "reply=" + str(t2.get("reply", "-")));
+failed = failed + verdict("turn 3 total is 10", t3.status == "ok" && t3.reply == "10", "reply=" + str(t3.get("reply", "-")));
+
+// A provider that cannot answer must FAIL the smoke case, never be skipped.
+bad = lm_prompt("team.lmctl", "Smoke", "please fail me now");
+failed = failed + verdict("provider error fails the case", bad.status != "ok" && contains(str(bad.get("error", "")), "mock provider exploded"), "status=" + str(bad.status) + " error=" + str(bad.get("error", "-")) + " (expected error text: mock provider exploded)");
+
+if (failed > 0) {
+  println("T0 provider smoke FAILED: " + str(failed) + " case(s)");
+  exit(1);
+}
+println("T0 provider smoke OK");

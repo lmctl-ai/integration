@@ -1,0 +1,4 @@
+# Offline, deterministic CLI diagnostic integration cases. No provider calls.
+r = system(["node", "tests/lmscript-diagnostic-cases.mjs"], 180000);
+if (r.code != 0) { lm_error(r.stderr); lm_exit(r.code); }
+print(trim(r.stdout));

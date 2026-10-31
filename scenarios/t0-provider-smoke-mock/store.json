@@ -1,0 +1,9 @@
+{
+  "scriptContains": {
+    "the first number is 3": "noted: first=3",
+    "the second number is 7": "noted: second=7",
+    "what is the total": "10",
+    "fail me": { "error": "mock provider exploded" },
+    "ping": "pong"
+  }
+}

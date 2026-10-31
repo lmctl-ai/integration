@@ -1,0 +1,72 @@
+# Neutral-API script contract. The Node driver creates a fresh ClaudeMock profile,
+# seeds three sessions, and scripts deterministic replies; no live provider is used.
+import "lib.lms";
+
+RESULTS = [];
+require(len(args) == 2, "usage: merged-api-contract.lms <teamfile> <workspace>");
+teamfile = args[0]; workspace = args[1];
+
+members_res = lm_members(teamfile);
+members = getlist(members_res, "members", []);
+record(RESULTS, "lm_members returns three seeded members", members_res.status == "ok" && type(members) == "array" && len(members) == 3,
+       "type=" + type(members) + " count=" + str(len(members)));
+lead_res = lm_member(teamfile, "Lead");
+lead = get(lead_res, "member", null);
+record(RESULTS, "lm_member resolves provider and session identity", lead_res.status == "ok" && lead != null && lead.provider == "ClaudeMock" && lead.sessionid != null,
+       json_stringify(lead_res));
+
+prompt_ok = lm_prompt(teamfile, "Lead", "API_PROMPT_OK");
+record(RESULTS, "lm_prompt returns a successful reply", prompt_ok.status == "ok" && prompt_ok.reply == "PROMPT_REPLY",
+       json_stringify(prompt_ok));
+prompt_error = lm_prompt(teamfile, "Lead", "API_PROMPT_ERROR");
+record(RESULTS, "lm_prompt reports provider error in its result map", prompt_error.status == "error"
+       && contains(prompt_error.error, "scripted prompt error"), json_stringify(prompt_error));
+
+agent = set(lead, "sessiondir", workspace);
+agent_before = agent.sessionid;
+agent_result = lm_agent(agent, "API_AGENT_OK");
+record(RESULTS, "lm_agent retains and returns sessionid on its member map", agent_result.status == "ok"
+       && agent.sessionid == agent_before && agent.sessionid != null,
+       "result=" + json_stringify(agent_result) + " sessionid=" + str(agent.sessionid));
+
+fanout_members = [set(members[1], "sessiondir", workspace), set(members[2], "sessiondir", workspace)];
+fanout = lm_fanout(fanout_members, ["API_FANOUT_A", "API_FANOUT_B"]);
+record(RESULTS, "lm_fanout preserves participant result order", type(fanout) == "array" && len(fanout) == 2
+       && fanout[0].status == "ok" && fanout[1].status == "ok"
+       && fanout[0].reply == "FANOUT_A_REPLY" && fanout[1].reply == "FANOUT_B_REPLY", json_stringify(fanout));
+
+batch_member = set(members[1], "sessiondir", workspace);
+batch_handle = lm_batch_open(batch_member, {idleTimeoutMs: 5000});
+batch_turn = lm_batch_turn(batch_handle, "API_BATCH_TURN", 1, 1);
+batch_closed = lm_batch_close(batch_handle, "done");
+record(RESULTS, "member-map batch opens, turns and closes", batch_turn.status == "ok"
+       && batch_turn.reply == "BATCH_REPLY" && batch_closed == true,
+       "turn=" + json_stringify(batch_turn) + " closed=" + str(batch_closed));
+
+sessions_res = lm_session_list({provider: "ClaudeMock", sessiondir: workspace, all: true});
+sessions = getlist(sessions_res, "sessions", []);
+record(RESULTS, "lm_session_list returns provider session records", sessions_res.status == "ok" && type(sessions) == "array"
+       && len(sessions) >= 3 && find_by(sessions, "sessionid", members[2].sessionid) != null,
+       "type=" + type(sessions) + " count=" + str(len(sessions)));
+
+delete_member = set(members[2], "sessiondir", workspace);
+delete_refused = lm_session_delete(delete_member);
+record(RESULTS, "lm_session_delete requires explicit force", delete_refused.status == "error"
+       && contains(delete_refused.error, "force: true") && delete_member.sessionid != null,
+       json_stringify(delete_refused));
+delete_result = lm_session_delete(delete_member, {force: true});
+record(RESULTS, "lm_session_delete removes session and clears member identity", delete_result.status == "deleted"
+       && delete_member.sessionid == null, "result=" + json_stringify(delete_result));
+sessions_after_delete_res = lm_session_list({provider: "ClaudeMock", sessiondir: workspace, all: true});
+sessions_after_delete = getlist(sessions_after_delete_res, "sessions", []);
+record(RESULTS, "deleted session is absent from next session list",
+       sessions_after_delete_res.status == "ok"
+       && find_by(sessions_after_delete, "sessionid", members[2].sessionid) == null, json_stringify(sessions_after_delete_res));
+
+quota = lm_ratelimit_readings({providers: ["__lmctl-test-unknown__"], timeoutSeconds: 1});
+record(RESULTS, "lm_ratelimit_readings retains result shape without quota network calls",
+       quota.status == "error" && type(quota.readings) == "array" && len(quota.readings) == 0
+         && contains(quota.error, "unknown provider"), json_stringify(quota));
+
+diffs = summary(RESULTS);
+if (diffs > 0) { lm_exit(1); }

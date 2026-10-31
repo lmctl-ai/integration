@@ -1,6 +1,6 @@
 # Pinned inputs of the integration scenarios (KEY=VALUE, read by the plan job of .github/workflows/e2e.yml).
 # `latest` legs run next to the pinned ones as early warning; bump a pin in its own small commit.
-LMMOCK=v0.1.30
+LMMOCK=v0.1.36
 # miniplayer publishes no release (decision D2 is the operator's): built from this commit, needs Node >= 20.
 MINIPLAYER=dad4589945357e961bea8e9d240e9a4a3da0c6f3
 NODE=24

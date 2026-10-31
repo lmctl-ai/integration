@@ -1,0 +1,7 @@
+[
+  {"id": "provider-smoke prints OKAY instead of WARN", "file": "lmctl-test/tests/provider-smoke.mjs", "from": "(isWarn ? 'WARN' : 'FAIL')", "to": "(isWarn ? 'OKAY' : 'FAIL')", "suites": ["provider-smoke-ratelimit", "provider-smoke-resilience"]},
+  {"id": "inconclusive classes lose upstream_throttled", "file": "lmctl-test/tests/models-validity.mjs", "from": "['quota_exhausted','upstream_throttled']", "to": "['quota_exhausted']", "suites": ["models-validity", "models-validity-inconclusive", "models-validity-process"]},
+  {"id": "required-lmctl-bin stops resolving symlinks", "file": "lmctl-test/tests/required-lmctl-bin.mjs", "from": "return realpathSync(value);", "to": "return value;", "suites": ["required-lmctl-bin"]},
+  {"id": "ordinary usage disallowed no longer skips", "file": "lmctl-test/tests/live-service-support.mjs", "from": "reading.ordinary_usage_allowed === false", "to": "reading.ordinary_usage_allowed === true", "suites": ["live-service-controls"]},
+  {"id": "classifier reject-first rule removed", "file": "lmctl-test/tests/rate-limit-classifier.mjs", "from": "if (isRejectFirst(s)) return false;", "to": "if (false) return false;", "suites": ["real-message-fixtures", "live-quota"]}
+]

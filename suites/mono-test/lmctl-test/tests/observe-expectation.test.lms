@@ -1,0 +1,48 @@
+# Unit contract for lib.lms observe_expectation (mono 009). Self-asserting: a violated
+# expectation aborts via require(); the wrapper checks the standard summary line.
+import "lib.lms";
+
+counter = { checks: 0 };
+fn expect(name, actual, expected) {
+  counter.checks = counter.checks + 1;
+  require(actual == expected, name + ": expected " + str(expected) + ", got " + str(actual));
+  print("PASS " + name);
+}
+
+# 1. lmplayer's naming convention is NOT a differ: the declared model keeps its
+#    `ollama-cloud/` prefix, the session reports the bare name, and the expected-observed
+#    field documents that convention. Credit billing: no per-token route is expected.
+R1 = [];
+ok1 = observe_expectation(R1, "lmplayer", "ollama-cloud/deepseek-v4.1-flash", "deepseek-v4.1-flash",
+                          "deepseek-v4.1-flash", "credit", "no-catalog", null, "cache", "2026-10-03T08:54:13Z");
+expect("lmplayer naming convention holds", ok1, true);
+expect("lmplayer record agrees", R1[0].ok, true);
+
+# 2. A REAL declared/observed mismatch is still caught: the session reports a different
+#    model entirely (the control the gate keeps its teeth with).
+R2 = [];
+ok2 = observe_expectation(R2, "lmplayer", "ollama-cloud/deepseek-v4.1-flash", "some-other-model",
+                          "deepseek-v4.1-flash", "credit", "no-catalog", null, "cache", "2026-10-03T08:54:13Z");
+expect("a real declared/observed mismatch is caught", ok2, false);
+expect("mismatch record differs", R2[0].ok, false);
+
+# 3. The unpriced pin is self-expiring: a credit-billed provider that GAINS a per-token
+#    route trips the record and forces a conscious decision.
+R3 = [];
+ok3 = observe_expectation(R3, "lmplayer", "ollama-cloud/deepseek-v4.1-flash", "deepseek-v4.1-flash",
+                          "deepseek-v4.1-flash", "credit", "direct", "litellm:deepseek/deepseek-v4.1-flash", "cache", "2026-10-03T08:54:13Z");
+expect("credit pin trips when a route appears", ok3, false);
+
+# 4. A per-token provider with a resolved route still agrees (unchanged semantics).
+R4 = [];
+ok4 = observe_expectation(R4, "codex", "gpt-6-luna", "gpt-6-luna", "gpt-6-luna",
+                          "per-token", "priced", "litellm:gpt-6-luna", "cache", "2026-10-03T08:54:13Z");
+expect("per-token provider with a route agrees", ok4, true);
+
+# 5. A per-token provider that LOSES its price route is still a differ.
+R5 = [];
+ok5 = observe_expectation(R5, "codex", "gpt-6-luna", "gpt-6-luna", "gpt-6-luna",
+                          "per-token", "no-catalog", null, "cache", "2026-10-03T08:54:13Z");
+expect("per-token provider losing its route is caught", ok5, false);
+
+print(str(counter.checks) + " assertions: " + str(counter.checks) + " pass, 0 fail");

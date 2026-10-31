@@ -1,0 +1,89 @@
+# name	class	reason (class: ported | support | skip-live | skip-host | skip-gate)
+01_injected_memory_dal_isolation.test.mjs	skip-host	imports lmctl-mono lmctl-src/dist/db/sqlite.js (source build), not the published package
+02_sqlite_array_param_binding.test.mjs	skip-host	imports lmctl-mono lmctl-src/dist/db/sqlite.js
+03_snapshot_cannot_see_later_writes.test.mjs	skip-host	imports lmctl-mono lmctl-src/dist/db/sqlite.js
+04_interpreter_while_sleep_and_fuel.test.mjs	skip-host	imports lmctl-mono lmctl-src/dist sources
+05_node_sqlite_boolean_binding.test.mjs	skip-host	imports lmctl-mono lmctl-src/dist sources
+06_sqlite_prepare_trailing_statements.test.mjs	skip-host	imports lmctl-mono lmctl-src/dist sources
+07_paths_resolve_db_retargeting.test.mjs	skip-host	imports lmctl-mono lmctl-src/dist sources
+catalog-probe.mjs	support	transport used by cost and catalog cases
+command-coverage-allowlist.json	support	allowlist read by command-coverage.mjs
+command-coverage.mjs	ported	every help command needs an executing case
+command-literals.lms	ported	cmd literal suite against the installed lmctl
+cost-feature-cases.lms	ported	wrapper of cost-feature-cases.mjs
+cost-feature-cases.mjs	ported	exact stored bills with fake Codex app-server and pinned prices
+cost-live-cases.mjs	support	live tier file (skipped without LMCTL_TEST_LIVE=1, never run live here); kept because feature-case-controls.mjs runs it
+doc-examples.lms	skip-host	needs the lmscript language docs of a source checkout; the npm package ships none
+dryrun-preflight.lms	ported	dry-run and preflight suite
+failure-detection.mjs	ported	proves the runner and assertions detect injected failures
+feature-case-controls.mjs	ported	broken-output controls of the cost and diagnostic suites
+fixtures	support	fixture data
+graphql-literal.lms	ported	graphql literal suite
+install-only.mjs	ported	clean install exposes the CLI without provider binaries
+installed-cli-hello-live-controls.mjs	support	fake-credential controls of the hello quickrun; run through installed-cli-hello-quickrun
+installed-cli-hello-quickrun.mjs	ported	installed hello entry point and argument forwarding, offline
+intent-cases.mjs	support	case table imported by offline-commands.mjs
+lib.lms	support	assertion library of the lms suites
+live-native-session.lms	skip-live	live native session probe
+live-price-route-contract.mjs	ported	replays a Codex catalog slice through the shipped resolver
+live-probe.mjs	support	real-binary preflight helper (never prompts a model); imported by live-quota
+live-quota-controls.mjs	ported	quota-skip controls
+live-quota.test.mjs	ported	quota skip rules with fake providers
+live-service-controls.mjs	ported	quota-skip behaviour including the agy 3p bucket rule
+live-service-support.mjs	support	helper of live-service-controls
+live.lms	skip-live	one tiny prompt per eligible real provider
+lmplayer-live.mjs	skip-live	needs lmplayer and OLLAMA_API_KEY
+lmscript-diagnostic-cases.lms	ported	wrapper of lmscript-diagnostic-cases.mjs
+lmscript-diagnostic-cases.mjs	ported	import-as guidance, expand, split_regex diagnostics
+lmscript-language-cases.mjs	ported	offline language cases
+mapping-inventory.lms	skip-host	globs /home/mma/repos/*/*.lmctl (operator's machine)
+mapping.lms	skip-host	reads operator teamfiles and ~/.cache/opencode/models.json, downloads a catalog
+merged-api-contract.lms	support	used by merged-api.mjs
+merged-api-epipe.lms	support	used by merged-api.mjs
+merged-api-flags.lms	support	used by merged-api.mjs
+merged-api-live.mjs	skip-live	real prompts and SIGTERM during a live batch
+merged-api-parity.lms	support	used by merged-api.mjs
+merged-api.mjs	ported	clean profile plus ClaudeMock contracts, mutation controls, frontend parity
+miniplayer-mock.mjs	ported	miniplayer ACP against a mock HTTP server
+miniplayer-tools.mjs	ported	miniplayer tool calls against a mock HTTP server
+models-validity-controls.mjs	skip-gate	reads the awsspot gate script periodic-check.sh
+models-validity-inconclusive.test.mjs	ported	inconclusive-class handling
+models-validity-process.test.mjs	ported	process-level models validity with fake providers (two cases read the awsspot gate scripts: skipped)
+models-validity.mjs	support	module under test and probe helper
+models-validity.test.mjs	ported	models validity unit tests (two cases read the awsspot gate scripts: skipped)
+native-git.lms	ported	native:git against the installed lmscript
+native-reads.mjs	support	run by offline-commands.mjs (state and cron read views on an empty and a seeded private database)
+native-session-fixture.mjs	support	fixture transport of native-session.lms
+native-session.lms	ported	native session suite
+new-surface.lms	ported	new command surface
+observe-expectation-contract.mjs	ported	fabricated session observations through lib.lms
+observe-expectation.test.lms	support	self-asserting contract run by observe-expectation-contract
+offline-commands.mjs	ported	offline command coverage (1400 lines)
+offline-session-commands.mjs	ported	tail, export, cost, terminal --size on a scratch HOME
+pref-overlay-live.mjs	skip-live	pref overlay across both frontends with live models
+pref-overlay.lms	ported	pref overlay with a mock base provider
+prohibitions.lms	skip-live	downloads the live model catalog from lmctl.com and reads durable-memory sample data (network, drifts)
+prompt-heartbeat-fixture.py	support	fixture of prompt-heartbeat.lms
+prompt-heartbeat.lms	ported	prompt heartbeat with a fake provider
+prompt-precondition.lms	support	used by prompt-precondition.test.mjs
+prompt-precondition.test.mjs	ported	prompt preconditions
+prompt.lms	skip-live	CLI versus host functions with live prompts
+provider-commands-known.json	skip-live	known failures of the live command matrix
+provider-commands.mjs	skip-live	live command matrix on real provider sessions (about 50 minutes)
+provider-smoke-ratelimit-controls.mjs	support	mutation controls of provider-smoke-ratelimit
+provider-smoke-ratelimit.test.mjs	ported	provider-smoke WARN/FAIL rules against fake providers (mock provider smoke)
+provider-smoke-resilience.test.mjs	ported	provider-smoke resilience against fake providers
+provider-smoke.mjs	support	the live smoke script itself; the ported tests drive it with fake provider binaries
+providers	support	provider helper modules
+rate-limit-classifier.mjs	support	classifier under test
+rate-limit-vectors.mjs	support	shared vectors
+read.lms	skip-host	reads the operator's lmctl-family teamfile and live ratelimit readings
+real-message-fixtures.test.mjs	ported	real refusal message fixtures
+recover-resumepoint.lms	ported	recover and resumepoint suite
+required-lmctl-bin.mjs	support	helper of required-lmctl-bin test
+required-lmctl-bin.test.mjs	ported	LMCTL_BIN must resolve
+run-install-commands.mjs	support	run by offline-commands.mjs (plain runs and the loopback github.com installer cases B1 to B6)
+schema-import.lms	ported	schema import suite (662 lines)
+schema-nocap.lms	ported	schema without capability suite
+unpinned.lms	skip-host	globs /home/mma/repos/*/*.lmctl (operator's machine)
+usage-boundary-cases.mjs	ported	usage boundary cases

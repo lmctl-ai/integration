@@ -1,0 +1,31 @@
+// Slot i of lm_fanout answers prompt i. Success of a slot means status "ok" AND a non-empty reply.
+failed = 0;
+
+function verdict(name, ok, detail) {
+  if (ok) {
+    println("PASS " + name);
+    return 0;
+  }
+  println("FAIL " + name + " :: " + detail);
+  return 1;
+}
+
+function usable(r) {
+  return r.status == "ok" && str(r.get("reply", "")) != "";
+}
+
+members = lm_members("team.lmctl").members;
+failed = failed + verdict("three members seeded", len(members) == 3, "members=" + str(len(members)));
+
+rs = lm_fanout(members, ["ping", "fail me", "empty please"]);
+failed = failed + verdict("one result per participant", len(rs) == 3, "results=" + str(len(rs)));
+
+failed = failed + verdict("slot 0 ok reply in order", usable(rs[0]) && rs[0].reply == "pong", "status=" + str(rs[0].status) + " reply=" + str(rs[0].get("reply", "-")));
+failed = failed + verdict("slot 1 scripted error in order", rs[1].status != "ok" && contains(str(rs[1].get("error", "")), "mock provider exploded"), "status=" + str(rs[1].status) + " error=" + str(rs[1].get("error", "-")) + " (expected error text: mock provider exploded)");
+failed = failed + verdict("slot 2 ok-but-empty is not usable", rs[2].status == "ok" && !usable(rs[2]), "status=" + str(rs[2].status) + " reply=" + str(rs[2].get("reply", "-")));
+
+if (failed > 0) {
+  println("T0 fanout FAILED: " + str(failed) + " case(s)");
+  exit(1);
+}
+println("T0 fanout OK");

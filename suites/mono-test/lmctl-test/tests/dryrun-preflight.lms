@@ -1,0 +1,235 @@
+# tests/dryrun-preflight.lms -- dry preflight and exit-code contract for both front ends.
+#
+# Verifies default dry preflight, exit codes (0, 1, 2, 7, 130, 143),
+# stdout withholding, effect guards, loop/fib evaluation, flags, stdin/-e,
+# and reserved prefix checks on both lmctl script and lmscript.
+
+import "lib.lms";
+
+RESULTS = [];
+
+LMCTL_BIN = env("LMCTL_BIN", "/home/mma/repos/lmctl-mono-it-bin/lmctl-src/bin/lmctl");
+LMSCRIPT_BIN = env("LMSCRIPT_BIN", "/home/mma/repos/lmctl-mono-it-bin/lmscript/bin/lmscript");
+
+RUN_ID = str(now()) + "_" + str(random());
+SCRATCH_DIR = "/tmp/lmctl-it-dryrun-" + RUN_ID;
+system(["mkdir", "-p", SCRATCH_DIR], 30000);
+SCRATCH_HOME = SCRATCH_DIR + "/home";
+SCRATCH_LMCTL = SCRATCH_HOME + "/.lmctl";
+SCRATCH_DB = SCRATCH_DIR + "/state.db";
+system(["mkdir", "-p", SCRATCH_LMCTL], 30000);
+
+fn run_env(argv) {
+  env_args = ["env", "HOME=" + SCRATCH_HOME, "LMCTL_HOME=" + SCRATCH_LMCTL, "LMCTL_DB=" + SCRATCH_DB, "NO_COLOR=1"];
+  return system(concat(env_args, argv), 60000);
+}
+
+fn exec_file(fe, file_path, extra_flags) {
+  call_args = [];
+  if (fe.is_lmctl) { call_args = [fe.bin, "script"]; }
+  else             { call_args = [fe.bin]; }
+  if (len(extra_flags) > 0) { call_args = concat(call_args, extra_flags); }
+  push(call_args, file_path);
+  return run_env(call_args);
+}
+
+fn exec_eval(fe, code_str, extra_flags) {
+  call_args = [];
+  if (fe.is_lmctl) { call_args = [fe.bin, "script"]; }
+  else             { call_args = [fe.bin]; }
+  if (len(extra_flags) > 0) { call_args = concat(call_args, extra_flags); }
+  push(call_args, "-e");
+  push(call_args, code_str);
+  return run_env(call_args);
+}
+
+FRONTENDS = [
+  {"name": "lmctl", "bin": LMCTL_BIN, "is_lmctl": true},
+  {"name": "lmscript", "bin": LMSCRIPT_BIN, "is_lmctl": false}
+];
+
+fe_idx = 0;
+while (fe_idx < len(FRONTENDS)) {
+  fe = FRONTENDS[fe_idx];
+  tag = " [" + fe.name + "]";
+
+  # 1. Long loop then require passes (exit 0)
+  r1 = exec_eval(fe, "i = 0; while (i < 500) { i = i + 1; } require(i == 500, \"loop failed\"); print(\"LOOP_DONE\");", []);
+  record(RESULTS, "long loop then require passes" + tag,
+         (r1.code == 0 && contains(r1.stdout, "LOOP_DONE")),
+         "code=" + str(r1.code) + " out=" + trim(r1.stdout) + " err=" + trim(r1.stderr));
+
+  # 2. error() continues with rc 1
+  r2 = exec_eval(fe, "error(\"nonfatal warning\"); print(\"CONTINUED\");", []);
+  record(RESULTS, "error() continues with rc 1" + tag,
+         (r2.code == 1 && contains(r2.stdout, "CONTINUED") && contains(r2.stderr, "nonfatal warning")),
+         "code=" + str(r2.code) + " out=" + trim(r2.stdout) + " err=" + trim(r2.stderr));
+
+  # 3. Real fatal failure exits 1 (issue 041) with located message and replays earlier stdout
+  r3 = exec_eval(fe, "print(\"WITHHELD_EARLIER_STDOUT\"); require(false, \"fatal preflight guard\");", []);
+  record(RESULTS, "real fatal failure exits 1 with located message and replays earlier stdout" + tag,
+         (r3.code == 1 && contains(r3.stdout, "WITHHELD_EARLIER_STDOUT") && contains(r3.stderr, "fatal preflight guard") && contains(r3.stderr, ":1:")),
+         "code=" + str(r3.code) + " out=" + trim(r3.stdout) + " err=" + trim(r3.stderr));
+
+  # 4. Guard after println/lm_log/printf still blocks (rc 1)
+  r4 = exec_eval(fe, "println(\"line\"); lm_log(\"log msg\"); printf(\"fmt %s\\n\", \"val\"); assert(false, \"blocked after log\");", []);
+  record(RESULTS, "guard after println/lm_log/printf still blocks (rc 1)" + tag,
+         (r4.code == 1 && contains(r4.stdout, "line") && contains(r4.stderr, "blocked after log")),
+         "code=" + str(r4.code) + " out=" + trim(r4.stdout) + " err=" + trim(r4.stderr));
+
+  # 5. fib(12)/fib(14) then assert(false) blocked (rc 1)
+  r5_12 = exec_eval(fe, "fn fib(n) { if (n <= 1) { return n; } return fib(n - 1) + fib(n - 2); } x = fib(12); assert(false, \"fib12 blocked\");", []);
+  record(RESULTS, "fib(12) then assert(false) blocked (rc 1)" + tag,
+         (r5_12.code == 1 && contains(r5_12.stderr, "fib12 blocked")),
+         "code=" + str(r5_12.code) + " err=" + trim(r5_12.stderr));
+
+  r5_14 = exec_eval(fe, "fn fib(n) { if (n <= 1) { return n; } return fib(n - 1) + fib(n - 2); } x = fib(14); assert(false, \"fib14 blocked\");", []);
+  record(RESULTS, "fib(14) then assert(false) blocked (rc 1)" + tag,
+         (r5_14.code == 1 && contains(r5_14.stderr, "fib14 blocked")),
+         "code=" + str(r5_14.code) + " err=" + trim(r5_14.stderr));
+
+  # 6. lm_error then assert blocked (rc 1)
+  r6 = exec_eval(fe, "lm_error(\"soft error recorded\"); assert(false, \"assert after lm_error\");", []);
+  record(RESULTS, "lm_error then assert blocked (rc 1)" + tag,
+         (r6.code == 1 && contains(r6.stderr, "assert after lm_error")),
+         "code=" + str(r6.code) + " err=" + trim(r6.stderr));
+
+  # 7. Real write_file before a failing assert still writes the file and fails rc 1 (control)
+  marker7 = SCRATCH_DIR + "/control_write_" + fe.name + ".txt";
+  system(["rm", "-f", marker7], 30000);
+  script7 = SCRATCH_DIR + "/test7_" + fe.name + ".lms";
+  write_file(script7, "write_file(\"" + marker7 + "\", \"written_data\"); assert(false, \"fail after effect\");");
+  r7 = exec_file(fe, script7, []);
+  wrote7 = file_exists(marker7);
+  read7 = "";
+  if (wrote7) { read7 = trim(read_file(marker7)); }
+  record(RESULTS, "real write_file before failing assert writes file and fails rc 1" + tag,
+         (r7.code == 1 && wrote7 && read7 == "written_data" && contains(r7.stderr, "fail after effect")),
+         "code=" + str(r7.code) + " wrote=" + str(wrote7) + " content=" + read7 + " err=" + trim(r7.stderr));
+
+  # 8. lm_exit(7) runs for real and exits 7
+  r8 = exec_eval(fe, "lm_exit(7);", []);
+  record(RESULTS, "lm_exit(7) runs for real and exits 7" + tag,
+         (r8.code == 7),
+         "code=" + str(r8.code));
+
+  # 9. exit(0)
+  r9 = exec_eval(fe, "exit(0); print(\"UNREACHABLE_AFTER_EXIT0\");", []);
+  record(RESULTS, "exit(0) terminates cleanly without running trailing code" + tag,
+         (r9.code == 0 && !contains(r9.stdout, "UNREACHABLE_AFTER_EXIT0")),
+         "code=" + str(r9.code) + " out=" + trim(r9.stdout));
+
+  # 10. --dry-run prints a PLAN and exits 0 and performs no effect (marker file absent)
+  marker10 = SCRATCH_DIR + "/dryrun_marker_" + fe.name + ".txt";
+  system(["rm", "-f", marker10], 30000);
+  script10 = SCRATCH_DIR + "/test10_" + fe.name + ".lms";
+  write_file(script10, "write_file(\"" + marker10 + "\", \"must_not_exist\"); print(\"PLANNED_OUTPUT\");");
+  r10 = exec_file(fe, script10, ["--dry-run"]);
+  marker10_present = file_exists(marker10);
+  record(RESULTS, "--dry-run prints a PLAN, exits 0, performs no effect" + tag,
+         (r10.code == 0 && !marker10_present && contains(r10.stdout, "PLAN complete") && contains(r10.stdout, "dummy write_file")),
+         "code=" + str(r10.code) + " marker=" + str(marker10_present) + " out=" + trim(r10.stdout));
+
+  # 11. --no-preflight skips the pass
+  script11 = SCRATCH_DIR + "/test11_" + fe.name + ".lms";
+  write_file(script11, "print(\"BEFORE_RUNTIME_ASSERT\"); assert(false, \"runtime crash\");");
+  r11 = exec_file(fe, script11, ["--no-preflight"]);
+  record(RESULTS, "--no-preflight skips the preflight pass" + tag,
+         (r11.code == 1 && contains(r11.stdout, "BEFORE_RUNTIME_ASSERT") && contains(r11.stderr, "runtime crash")),
+         "code=" + str(r11.code) + " out=" + trim(r11.stdout) + " err=" + trim(r11.stderr));
+
+  # 12. Flags combination errors
+  script12 = SCRATCH_DIR + "/test12_" + fe.name + ".lms";
+  write_file(script12, "print(\"SHOULD_NOT_RUN\");");
+  r12a = exec_file(fe, script12, ["--dry-run", "--no-preflight"]);
+  r12b = exec_file(fe, script12, ["--check", "--dry-run"]);
+  record(RESULTS, "flags combination errors rejected" + tag,
+         (r12a.code == 1 && contains(r12a.stderr, "incompatible execution modes/options") &&
+          r12b.code == 1 && contains(r12b.stderr, "incompatible execution modes/options")),
+         "r12a_code=" + str(r12a.code) + " r12b_code=" + str(r12b.code) + " err=" + trim(r12a.stderr));
+
+  # 13. stdin script (-) and -e
+  stdin_cmd = "";
+  if (fe.is_lmctl) {
+    stdin_cmd = "printf 'print(\"STDIN_HERMETIC_PASS\");\\n' | " + fe.bin + " script -";
+  } else {
+    stdin_cmd = "printf 'print(\"STDIN_HERMETIC_PASS\");\\n' | " + fe.bin + " -";
+  }
+  r13_stdin = system(["bash", "-c", stdin_cmd], 30000);
+  r13_eval = exec_eval(fe, "print(\"EVAL_HERMETIC_PASS\");", []);
+  record(RESULTS, "stdin script (-) and -e execute correctly" + tag,
+         (r13_stdin.code == 0 && contains(r13_stdin.stdout, "STDIN_HERMETIC_PASS") &&
+          r13_eval.code == 0 && contains(r13_eval.stdout, "EVAL_HERMETIC_PASS")),
+         "stdin_code=" + str(r13_stdin.code) + " eval_code=" + str(r13_eval.code));
+
+  # 14. Output appears exactly once (no duplicated stdout)
+  r14 = exec_eval(fe, "print(\"EXACTLY_ONCE_MARKER\");", []);
+  c14 = count_matches(r14.stdout, "EXACTLY_ONCE_MARKER");
+  record(RESULTS, "output appears exactly once (no duplicated stdout)" + tag,
+         (r14.code == 0 && c14 == 1),
+         "code=" + str(r14.code) + " occurrences=" + str(c14) + " out=" + trim(r14.stdout));
+
+  # 15. SIGINT/SIGTERM during a long sleep_ms exits 130/143
+  sig_log = SCRATCH_DIR + "/sig_" + fe.name + ".log";
+  sig_target = "";
+  if (fe.is_lmctl) {
+    sig_target = fe.bin + " script -e 'print(\"READY\"); sleep_ms(10000);'";
+  } else {
+    sig_target = fe.bin + " -e 'print(\"READY\"); sleep_ms(10000);'";
+  }
+
+  int_cmd = sig_target + " > " + sig_log + " 2>&1 & target_pid=$!; sleep 0.25; kill -INT $target_pid; wait $target_pid; echo $?";
+  r15_int = system(["bash", "-c", int_cmd], 30000);
+  int_status = trim(r15_int.stdout);
+
+  term_cmd = sig_target + " > " + sig_log + " 2>&1 & target_pid=$!; sleep 0.25; kill -TERM $target_pid; wait $target_pid; echo $?";
+  r15_term = system(["bash", "-c", term_cmd], 30000);
+  term_status = trim(r15_term.stdout);
+
+  record(RESULTS, "SIGINT/SIGTERM during long sleep_ms exits 130/143" + tag,
+         (int_status == "130" && term_status == "143"),
+         "sigint=" + int_status + " sigterm=" + term_status);
+
+  # 16. Reserved-prefix check (fn lm_x rejected, package lm_x rejected; ordinary names fine)
+  chk_fn = "";
+  chk_pkg = "";
+  chk_ok = "";
+  if (fe.is_lmctl) {
+    chk_fn = fe.bin + " script --check -e 'fn lm_forbidden() { return 1; }'";
+    chk_pkg = fe.bin + " script --check -e 'package lm_forbidden; x = 1;'";
+    chk_ok = fe.bin + " script --check -e 'package my_pkg; fn ordinary_func() { return 1; }'";
+  } else {
+    chk_fn = fe.bin + " --check -e 'fn lm_forbidden() { return 1; }'";
+    chk_pkg = fe.bin + " --check -e 'package lm_forbidden; x = 1;'";
+    chk_ok = fe.bin + " --check -e 'package my_pkg; fn ordinary_func() { return 1; }'";
+  }
+  r16_fn = system(["bash", "-c", chk_fn], 30000);
+  r16_pkg = system(["bash", "-c", chk_pkg], 30000);
+  r16_ok = system(["bash", "-c", chk_ok], 30000);
+  record(RESULTS, "reserved-prefix check rejects lm_ prefix on fn and package" + tag,
+         (r16_fn.code == 2 && contains(r16_fn.stderr, "reserved built-in prefix") &&
+          r16_pkg.code == 2 && contains(r16_pkg.stderr, "reserved built-in name/prefix") &&
+          r16_ok.code == 0),
+         "fn_code=" + str(r16_fn.code) + " pkg_code=" + str(r16_pkg.code) + " ok_code=" + str(r16_ok.code));
+
+  fe_idx = fe_idx + 1;
+}
+
+# Self-check negative control: verify record() correctly flags a failure
+dummy_results = [];
+record(dummy_results, "intentional negative control", false, "testing checker detects failure");
+detected_fault = (len(filter_by(dummy_results, "ok", false)) == 1);
+record(RESULTS, "checker detects failure in negative control",
+       detected_fault, "checker must detect failure");
+
+# External fault injection for failure-detection.mjs
+if (env("FAULT_DRYRUN", "") != "") {
+  record(RESULTS, "injected fault FAULT_DRYRUN", false, "FAULT_DRYRUN deliberate negative control failure");
+}
+
+# Cleanup scratch
+system(["rm", "-rf", SCRATCH_DIR], 30000);
+
+failures = len(filter_by(RESULTS, "ok", false));
+print(format("{0} assertions: {1} pass, {2} fail", len(RESULTS), len(RESULTS) - failures, failures));
+if (failures > 0) { lm_exit(1); }

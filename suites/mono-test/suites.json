@@ -1,0 +1,265 @@
+{
+  "comment": "Ported suites of lmctl-mono-test lmctl-test (see SOURCE.md, inventory.tsv). kind: lmctl-script runs LMCTL_BIN script FILE; node runs FILE; node-test runs node --test FILE. usesLmctl suites drive the installed CLI and must turn red against the broken-bin control; the others are pure unit suites with their own shipped controls. skipTests are regular expressions of test names that cannot run outside the operator's checkout, each with its reason.",
+  "suites": [
+    {
+      "id": "offline-commands",
+      "kind": "node",
+      "file": "offline-commands.mjs",
+      "usesLmctl": true
+    },
+    {
+      "id": "new-surface",
+      "kind": "lmctl-script",
+      "file": "new-surface.lms",
+      "usesLmctl": true
+    },
+    {
+      "id": "merged-api",
+      "kind": "node",
+      "file": "merged-api.mjs",
+      "usesLmctl": true
+    },
+    {
+      "id": "cost-feature-cases",
+      "kind": "lmctl-script",
+      "file": "cost-feature-cases.lms",
+      "usesLmctl": true
+    },
+    {
+      "id": "lmscript-diagnostic-cases",
+      "kind": "lmctl-script",
+      "file": "lmscript-diagnostic-cases.lms",
+      "usesLmctl": true
+    },
+    {
+      "id": "usage-boundary-cases",
+      "kind": "node",
+      "file": "usage-boundary-cases.mjs",
+      "usesLmctl": true
+    },
+    {
+      "id": "lmscript-language-cases",
+      "kind": "node",
+      "file": "lmscript-language-cases.mjs",
+      "usesLmctl": true
+    },
+    {
+      "id": "native-session",
+      "kind": "lmctl-script",
+      "file": "native-session.lms",
+      "usesLmctl": true
+    },
+    {
+      "id": "prompt-heartbeat",
+      "kind": "lmctl-script",
+      "file": "prompt-heartbeat.lms",
+      "usesLmctl": true
+    },
+    {
+      "id": "dryrun-preflight",
+      "kind": "lmctl-script",
+      "file": "dryrun-preflight.lms",
+      "usesLmctl": true
+    },
+    {
+      "id": "native-git",
+      "kind": "lmctl-script",
+      "file": "native-git.lms",
+      "usesLmctl": true
+    },
+    {
+      "id": "command-literals",
+      "kind": "lmctl-script",
+      "file": "command-literals.lms",
+      "usesLmctl": true
+    },
+    {
+      "id": "graphql-literal",
+      "kind": "lmctl-script",
+      "file": "graphql-literal.lms",
+      "usesLmctl": true
+    },
+    {
+      "id": "recover-resumepoint",
+      "kind": "lmctl-script",
+      "file": "recover-resumepoint.lms",
+      "usesLmctl": true
+    },
+    {
+      "id": "schema-import",
+      "kind": "lmctl-script",
+      "file": "schema-import.lms",
+      "usesLmctl": true
+    },
+    {
+      "id": "pref-overlay",
+      "kind": "lmctl-script",
+      "file": "pref-overlay.lms",
+      "usesLmctl": true
+    },
+    {
+      "id": "schema-nocap",
+      "kind": "lmctl-script",
+      "file": "schema-nocap.lms",
+      "usesLmctl": true
+    },
+    {
+      "id": "command-coverage",
+      "kind": "node",
+      "file": "command-coverage.mjs",
+      "usesLmctl": true
+    },
+    {
+      "id": "install-only",
+      "kind": "node",
+      "file": "install-only.mjs",
+      "usesLmctl": true
+    },
+    {
+      "id": "installed-cli-hello-quickrun",
+      "kind": "node",
+      "file": "installed-cli-hello-quickrun.mjs",
+      "usesLmctl": true
+    },
+    {
+      "id": "offline-session-commands",
+      "kind": "node",
+      "file": "offline-session-commands.mjs",
+      "usesLmctl": true
+    },
+    {
+      "id": "observe-expectation-contract",
+      "kind": "node",
+      "file": "observe-expectation-contract.mjs",
+      "usesLmctl": true
+    },
+    {
+      "id": "live-price-route-contract",
+      "kind": "node",
+      "file": "live-price-route-contract.mjs",
+      "usesLmctl": true
+    },
+    {
+      "id": "miniplayer-mock",
+      "kind": "node",
+      "file": "miniplayer-mock.mjs",
+      "usesLmctl": true,
+      "needs": [
+        "miniplayer"
+      ]
+    },
+    {
+      "id": "miniplayer-tools",
+      "kind": "node",
+      "file": "miniplayer-tools.mjs",
+      "usesLmctl": true,
+      "needs": [
+        "miniplayer"
+      ]
+    },
+    {
+      "id": "failure-detection",
+      "kind": "node",
+      "file": "failure-detection.mjs",
+      "usesLmctl": true
+    },
+    {
+      "id": "feature-case-controls",
+      "kind": "node",
+      "file": "feature-case-controls.mjs",
+      "usesLmctl": true
+    },
+    {
+      "id": "live-quota-controls",
+      "kind": "node",
+      "file": "live-quota-controls.mjs",
+      "usesLmctl": true
+    },
+    {
+      "id": "live-service-controls",
+      "kind": "node",
+      "file": "live-service-controls.mjs",
+      "usesLmctl": false,
+      "control": "pure quota-skip rules; control is its own assertions plus the pure-suite mutation in tests/suite-controls.sh"
+    },
+    {
+      "id": "provider-smoke-ratelimit-controls",
+      "kind": "node",
+      "file": "provider-smoke-ratelimit-controls.mjs",
+      "usesLmctl": false,
+      "control": "shipped mutation controls of provider-smoke-ratelimit"
+    },
+    {
+      "id": "models-validity",
+      "kind": "node-test",
+      "file": "models-validity.test.mjs",
+      "usesLmctl": false,
+      "control": "pure-suite mutation",
+      "skipTests": [
+        "never pass --all-models",
+        "LMCTL_MODELS_ALL in environment"
+      ]
+    },
+    {
+      "id": "models-validity-inconclusive",
+      "kind": "node-test",
+      "file": "models-validity-inconclusive.test.mjs",
+      "usesLmctl": false,
+      "control": "pure-suite mutation",
+      "skipTests": [
+        "real built package API"
+      ]
+    },
+    {
+      "id": "models-validity-process",
+      "kind": "node-test",
+      "file": "models-validity-process.test.mjs",
+      "usesLmctl": false,
+      "control": "pure-suite mutation",
+      "skipTests": [
+        "periodic step preserves login HOME"
+      ]
+    },
+    {
+      "id": "provider-smoke-ratelimit",
+      "kind": "node-test",
+      "file": "provider-smoke-ratelimit.test.mjs",
+      "usesLmctl": false,
+      "control": "pure-suite mutation"
+    },
+    {
+      "id": "provider-smoke-resilience",
+      "kind": "node-test",
+      "file": "provider-smoke-resilience.test.mjs",
+      "usesLmctl": false,
+      "control": "pure-suite mutation"
+    },
+    {
+      "id": "prompt-precondition",
+      "kind": "node-test",
+      "file": "prompt-precondition.test.mjs",
+      "usesLmctl": true
+    },
+    {
+      "id": "real-message-fixtures",
+      "kind": "node-test",
+      "file": "real-message-fixtures.test.mjs",
+      "usesLmctl": false,
+      "control": "pure-suite mutation"
+    },
+    {
+      "id": "required-lmctl-bin",
+      "kind": "node-test",
+      "file": "required-lmctl-bin.test.mjs",
+      "usesLmctl": false,
+      "control": "pure-suite mutation"
+    },
+    {
+      "id": "live-quota",
+      "kind": "node-test",
+      "file": "live-quota.test.mjs",
+      "usesLmctl": false,
+      "control": "pure-suite mutation"
+    }
+  ]
+}

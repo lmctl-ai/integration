@@ -1,0 +1,402 @@
+# tests/pref-overlay.lms -- Integration tests for issue 067 --pref overlay
+#
+# Covers issue 067 --pref overlay contract across both frontends (LMSCRIPT_BIN and LMCTL_BIN):
+# - base init.toml only (without --pref)
+# - base + pref with per-property override (retains omitted base keys)
+# - pref adds a new property/section
+# - leaf type change without coercion (e.g. number -> string, bool -> number)
+# - list replaced whole (not appended or merged)
+# - table/value collision refused with located error naming path and both files
+# - bad pref file and missing pref file give located error and correct exit codes:
+#     run mode: exit 1
+#     --check mode: exit 2
+# - --pref after the source file is treated as script data in ARGV
+# - run_script child inherits overlay and runtime store edits
+# - dry-run / default preflight read the same overlay
+# - -e and stdin forms
+# - base file is never written (byte-identical content and unmodified mtime)
+# - negative control for failure-detection harness
+
+import "lib.lms";
+
+RESULTS = [];
+
+LMCTL_BIN = env("LMCTL_BIN", "");
+if (LMCTL_BIN == "") {
+  println("error: set LMCTL_BIN to the lmctl binary under test (no default: the old default path is retired)");
+  lm_exit(2);
+}
+LMSCRIPT_BIN = env("LMSCRIPT_BIN", "");
+if (LMSCRIPT_BIN == "") {
+  println("error: set LMSCRIPT_BIN to the lmscript binary under test (no default: the old default path is retired)");
+  lm_exit(2);
+}
+NODE_BIN = env("NODE_BIN", "node");
+
+root = temp_file() + "-pref-overlay-suite";
+home_dir = root + "/home";
+profile_dir = root + "/profile";
+cwd_dir = root + "/cwd";
+system(["mkdir", "-p", home_dir], 30000);
+system(["mkdir", "-p", profile_dir], 30000);
+system(["mkdir", "-p", cwd_dir], 30000);
+
+base_init = profile_dir + "/init.toml";
+base_content = "[Provider1]\n" +
+"provider = \"ClaudeMock\"\n" +
+"model1 = \"base-m1\"\n" +
+"Model2 = \"base-m2\"\n" +
+"Model3 = \"base-m3\"\n\n" +
+"[Env]\n" +
+"base_only = \"base-val\"\n\n" +
+"[Types]\n" +
+"num = 42\n" +
+"bool = true\n" +
+"str = \"old-text\"\n\n" +
+"[Lists]\n" +
+"items = [\"a\", \"b\", \"c\"]\n\n" +
+"[Coll]\n" +
+"x = 100\n";
+
+write_file(base_init, base_content);
+
+pref_toml = root + "/pref.toml";
+pref_content = "[Provider1]\n" +
+"Model2 = \"pref-m2\"\n\n" +
+"[Custom]\n" +
+"new_property = \"created-val\"\n\n" +
+"[Types]\n" +
+"num = \"forty-two\"\n" +
+"bool = 123\n" +
+"str = false\n\n" +
+"[Lists]\n" +
+"items = [\"only-z\"]\n";
+
+write_file(pref_toml, pref_content);
+
+# Record initial base mtime and content for verification
+mtime_init_cmd = system(["node", "-e", "const fs = require('fs'); process.stdout.write(String(fs.statSync(" + json_stringify(base_init) + ").mtimeMs));"], 30000);
+initial_mtime = trim(mtime_init_cmd.stdout);
+
+fn run_frontend(bin_path, is_lmctl, args_list, timeout_ms) {
+  env_args = [
+    "env",
+    "PATH=" + env("PATH", ""),
+    "HOME=" + home_dir,
+    "LMCTL_HOME=" + profile_dir,
+    "LMCTL_DB=" + root + "/state.db",
+    "NO_COLOR=1"
+  ];
+  call_args = concat(env_args, [bin_path]);
+  if (is_lmctl) {
+    call_args = concat(call_args, ["script"]);
+  }
+  call_args = concat(call_args, args_list);
+  t = 60000;
+  if (timeout_ms != null && timeout_ms > 0) {
+    t = timeout_ms;
+  }
+  return system(call_args, t);
+}
+
+# ============================================================================
+# Section 1: Base init.toml only (without --pref)
+# ============================================================================
+
+s_base = root + "/s_base.lms";
+write_file(s_base, "println(\"M2:\" + PROPS.Provider1.Model2 + \",BASE:\" + PROPS.Env.base_only + \",HAS:\" + str(has_property(\"Custom.new_property\")));\n");
+
+r1_lms = run_frontend(LMSCRIPT_BIN, false, [s_base], 30000);
+record(RESULTS, "base-only init.toml read via lmscript",
+       r1_lms.code == 0 && contains(r1_lms.stdout, "M2:base-m2,BASE:base-val,HAS:false"),
+       "code=" + str(r1_lms.code) + " out=" + r1_lms.stdout + " err=" + r1_lms.stderr);
+
+r1_ctl = run_frontend(LMCTL_BIN, true, [s_base], 30000);
+record(RESULTS, "base-only init.toml read via lmctl script",
+       r1_ctl.code == 0 && contains(r1_ctl.stdout, "M2:base-m2,BASE:base-val,HAS:false"),
+       "code=" + str(r1_ctl.code) + " out=" + r1_ctl.stdout + " err=" + r1_ctl.stderr);
+
+same(RESULTS, "base-only frontend parity", r1_lms.stdout, r1_ctl.stdout);
+
+# ============================================================================
+# Section 2: Base + pref with per-property override
+# ============================================================================
+
+s_override = root + "/s_override.lms";
+write_file(s_override, "println(\"M1:\" + PROPS.Provider1.Model1 + \",M2:\" + PROPS.Provider1.Model2 + \",M3:\" + PROPS.Provider1.Model3 + \",BASE:\" + PROPS.Env.base_only);\n");
+
+r2_lms = run_frontend(LMSCRIPT_BIN, false, ["--pref", pref_toml, s_override], 30000);
+record(RESULTS, "per-property override retains omitted base keys via lmscript",
+       r2_lms.code == 0 && contains(r2_lms.stdout, "M1:base-m1,M2:pref-m2,M3:base-m3,BASE:base-val"),
+       "code=" + str(r2_lms.code) + " out=" + r2_lms.stdout + " err=" + r2_lms.stderr);
+
+r2_ctl = run_frontend(LMCTL_BIN, true, ["--pref", pref_toml, s_override], 30000);
+record(RESULTS, "per-property override retains omitted base keys via lmctl script",
+       r2_ctl.code == 0 && contains(r2_ctl.stdout, "M1:base-m1,M2:pref-m2,M3:base-m3,BASE:base-val"),
+       "code=" + str(r2_ctl.code) + " out=" + r2_ctl.stdout + " err=" + r2_ctl.stderr);
+
+same(RESULTS, "per-property override frontend parity", r2_lms.stdout, r2_ctl.stdout);
+
+# ============================================================================
+# Section 3: Pref adds a new property
+# ============================================================================
+
+s_add = root + "/s_add.lms";
+write_file(s_add, "println(\"HAS:\" + str(has_property(\"Custom.new_property\")) + \",VAL:\" + PROPS.Custom.new_property);\n");
+
+r3_lms = run_frontend(LMSCRIPT_BIN, false, ["--pref", pref_toml, s_add], 30000);
+record(RESULTS, "pref adds new property via lmscript",
+       r3_lms.code == 0 && contains(r3_lms.stdout, "HAS:true,VAL:created-val"),
+       "code=" + str(r3_lms.code) + " out=" + r3_lms.stdout + " err=" + r3_lms.stderr);
+
+r3_ctl = run_frontend(LMCTL_BIN, true, ["--pref", pref_toml, s_add], 30000);
+record(RESULTS, "pref adds new property via lmctl script",
+       r3_ctl.code == 0 && contains(r3_ctl.stdout, "HAS:true,VAL:created-val"),
+       "code=" + str(r3_ctl.code) + " out=" + r3_ctl.stdout + " err=" + r3_ctl.stderr);
+
+same(RESULTS, "pref adds new property frontend parity", r3_lms.stdout, r3_ctl.stdout);
+
+# ============================================================================
+# Section 4: Leaf type change without coercion
+# ============================================================================
+
+s_types = root + "/s_types.lms";
+write_file(s_types, "println(\"JSON:\" + json_stringify([PROPS.Types.num, PROPS.Types.bool, PROPS.Types.str]));\n");
+
+r4_lms = run_frontend(LMSCRIPT_BIN, false, ["--pref", pref_toml, s_types], 30000);
+record(RESULTS, "leaf type change without coercion via lmscript",
+       r4_lms.code == 0 && contains(r4_lms.stdout, "JSON:[\"forty-two\",123,false]"),
+       "code=" + str(r4_lms.code) + " out=" + r4_lms.stdout + " err=" + r4_lms.stderr);
+
+r4_ctl = run_frontend(LMCTL_BIN, true, ["--pref", pref_toml, s_types], 30000);
+record(RESULTS, "leaf type change without coercion via lmctl script",
+       r4_ctl.code == 0 && contains(r4_ctl.stdout, "JSON:[\"forty-two\",123,false]"),
+       "code=" + str(r4_ctl.code) + " out=" + r4_ctl.stdout + " err=" + r4_ctl.stderr);
+
+same(RESULTS, "leaf type change frontend parity", r4_lms.stdout, r4_ctl.stdout);
+
+# ============================================================================
+# Section 5: List replaced whole
+# ============================================================================
+
+s_lists = root + "/s_lists.lms";
+write_file(s_lists, "println(\"LEN:\" + str(len(PROPS.Lists.items)) + \",VAL:\" + json_stringify(PROPS.Lists.items));\n");
+
+r5_lms = run_frontend(LMSCRIPT_BIN, false, ["--pref", pref_toml, s_lists], 30000);
+record(RESULTS, "list replaced whole without append/merge via lmscript",
+       r5_lms.code == 0 && contains(r5_lms.stdout, "LEN:1,VAL:[\"only-z\"]"),
+       "code=" + str(r5_lms.code) + " out=" + r5_lms.stdout + " err=" + r5_lms.stderr);
+
+r5_ctl = run_frontend(LMCTL_BIN, true, ["--pref", pref_toml, s_lists], 30000);
+record(RESULTS, "list replaced whole without append/merge via lmctl script",
+       r5_ctl.code == 0 && contains(r5_ctl.stdout, "LEN:1,VAL:[\"only-z\"]"),
+       "code=" + str(r5_ctl.code) + " out=" + r5_ctl.stdout + " err=" + r5_ctl.stderr);
+
+same(RESULTS, "list replaced whole frontend parity", r5_lms.stdout, r5_ctl.stdout);
+
+# ============================================================================
+# Section 6: Table/value collision refused with located error
+# ============================================================================
+
+collision_toml = root + "/collision.toml";
+write_file(collision_toml, "Coll = \"scalar-collision\"\n");
+
+s_coll = root + "/s_coll.lms";
+write_file(s_coll, "println(PROPS.Coll);\n");
+
+r6_lms = run_frontend(LMSCRIPT_BIN, false, ["--pref", collision_toml, s_coll], 30000);
+record(RESULTS, "table/value collision refused with located error via lmscript",
+       r6_lms.code == 1 && contains(r6_lms.stderr, "Coll") &&
+       contains(r6_lms.stderr, "cannot merge a table and a value") &&
+       contains(r6_lms.stderr, "init.toml") && contains(r6_lms.stderr, "collision.toml"),
+       "code=" + str(r6_lms.code) + " stderr=" + r6_lms.stderr);
+
+r6_ctl = run_frontend(LMCTL_BIN, true, ["--pref", collision_toml, s_coll], 30000);
+record(RESULTS, "table/value collision refused with located error via lmctl script",
+       r6_ctl.code == 1 && contains(r6_ctl.stderr, "Coll") &&
+       contains(r6_ctl.stderr, "cannot merge a table and a value") &&
+       contains(r6_ctl.stderr, "init.toml") && contains(r6_ctl.stderr, "collision.toml"),
+       "code=" + str(r6_ctl.code) + " stderr=" + r6_ctl.stderr);
+
+# ============================================================================
+# Section 7: Bad pref file and missing pref file exit codes
+# ============================================================================
+
+missing_toml = root + "/missing.toml";
+bad_toml = root + "/bad.toml";
+write_file(bad_toml, "[broken\nx = 1\n");
+
+# Missing file under run mode: exit 1
+r7_mrun_lms = run_frontend(LMSCRIPT_BIN, false, ["--pref", missing_toml, s_base], 30000);
+record(RESULTS, "missing pref file under run exits 1 with filename via lmscript",
+       r7_mrun_lms.code == 1 && contains(r7_mrun_lms.stderr, "missing.toml"),
+       "code=" + str(r7_mrun_lms.code) + " stderr=" + r7_mrun_lms.stderr);
+
+r7_mrun_ctl = run_frontend(LMCTL_BIN, true, ["--pref", missing_toml, s_base], 30000);
+record(RESULTS, "missing pref file under run exits 1 with filename via lmctl script",
+       r7_mrun_ctl.code == 1 && contains(r7_mrun_ctl.stderr, "missing.toml"),
+       "code=" + str(r7_mrun_ctl.code) + " stderr=" + r7_mrun_ctl.stderr);
+
+# Missing file under --check mode: exit 2
+r7_mchk_lms = run_frontend(LMSCRIPT_BIN, false, ["--check", "--pref", missing_toml, s_base], 30000);
+record(RESULTS, "missing pref file under --check exits 2 with filename via lmscript",
+       r7_mchk_lms.code == 2 && contains(r7_mchk_lms.stderr, "missing.toml"),
+       "code=" + str(r7_mchk_lms.code) + " stderr=" + r7_mchk_lms.stderr);
+
+r7_mchk_ctl = run_frontend(LMCTL_BIN, true, ["--check", "--pref", missing_toml, s_base], 30000);
+record(RESULTS, "missing pref file under --check exits 2 with filename via lmctl script",
+       r7_mchk_ctl.code == 2 && contains(r7_mchk_ctl.stderr, "missing.toml"),
+       "code=" + str(r7_mchk_ctl.code) + " stderr=" + r7_mchk_ctl.stderr);
+
+# Bad TOML syntax under run mode: exit 1
+r7_brun_lms = run_frontend(LMSCRIPT_BIN, false, ["--pref", bad_toml, s_base], 30000);
+record(RESULTS, "bad pref file syntax under run exits 1 with filename via lmscript",
+       r7_brun_lms.code == 1 && contains(r7_brun_lms.stderr, "bad.toml"),
+       "code=" + str(r7_brun_lms.code) + " stderr=" + r7_brun_lms.stderr);
+
+r7_brun_ctl = run_frontend(LMCTL_BIN, true, ["--pref", bad_toml, s_base], 30000);
+record(RESULTS, "bad pref file syntax under run exits 1 with filename via lmctl script",
+       r7_brun_ctl.code == 1 && contains(r7_brun_ctl.stderr, "bad.toml"),
+       "code=" + str(r7_brun_ctl.code) + " stderr=" + r7_brun_ctl.stderr);
+
+# Bad TOML syntax under --check mode: exit 2
+r7_bchk_lms = run_frontend(LMSCRIPT_BIN, false, ["--check", "--pref", bad_toml, s_base], 30000);
+record(RESULTS, "bad pref file syntax under --check exits 2 with filename via lmscript",
+       r7_bchk_lms.code == 2 && contains(r7_bchk_lms.stderr, "bad.toml"),
+       "code=" + str(r7_bchk_lms.code) + " stderr=" + r7_bchk_lms.stderr);
+
+r7_bchk_ctl = run_frontend(LMCTL_BIN, true, ["--check", "--pref", bad_toml, s_base], 30000);
+record(RESULTS, "bad pref file syntax under --check exits 2 with filename via lmctl script",
+       r7_bchk_ctl.code == 2 && contains(r7_bchk_ctl.stderr, "bad.toml"),
+       "code=" + str(r7_bchk_ctl.code) + " stderr=" + r7_bchk_ctl.stderr);
+
+# ============================================================================
+# Section 8: --pref AFTER source file is script data
+# ============================================================================
+
+tail_pref = root + "/tail.toml";
+write_file(tail_pref, "[Provider1]\nModel2 = \"tail-override\"\n");
+
+s_tail = root + "/s_tail.lms";
+write_file(s_tail, "println(\"VAL:\" + PROPS.Provider1.Model2 + \",ARGS:\" + json_stringify(args));\n");
+
+r8_lms = run_frontend(LMSCRIPT_BIN, false, [s_tail, "--pref", tail_pref], 30000);
+record(RESULTS, "--pref after source is script data via lmscript",
+       r8_lms.code == 0 && contains(r8_lms.stdout, "VAL:base-m2") &&
+       contains(r8_lms.stdout, "ARGS:[\"--pref\"," + json_stringify(tail_pref) + "]"),
+       "code=" + str(r8_lms.code) + " out=" + r8_lms.stdout);
+
+r8_ctl = run_frontend(LMCTL_BIN, true, [s_tail, "--pref", tail_pref], 30000);
+record(RESULTS, "--pref after source is script data via lmctl script",
+       r8_ctl.code == 0 && contains(r8_ctl.stdout, "VAL:base-m2") &&
+       contains(r8_ctl.stdout, "ARGS:[\"--pref\"," + json_stringify(tail_pref) + "]"),
+       "code=" + str(r8_ctl.code) + " out=" + r8_ctl.stdout);
+
+same(RESULTS, "tail --pref script data frontend parity", r8_lms.stdout, r8_ctl.stdout);
+
+# ============================================================================
+# Section 9: run_script child inherits overlay and runtime store edits
+# ============================================================================
+
+s_child = root + "/child.lms";
+write_file(s_child, "before = get_property(\"Custom.edited\");\n[before, PROPS.Provider1.Model2, PROPS.Custom.new_property];\n");
+
+s_parent = root + "/parent.lms";
+write_file(s_parent, "set_property(\"Custom.edited\", \"parent-val\");\nr = run_script(" + json_stringify(s_child) + ");\nprintln(\"CHILD:\" + json_stringify(r.value));\n");
+
+r9_lms = run_frontend(LMSCRIPT_BIN, false, ["--pref", pref_toml, s_parent], 30000);
+record(RESULTS, "run_script child inherits overlay and parent edits via lmscript",
+       r9_lms.code == 0 && contains(r9_lms.stdout, "CHILD:[\"parent-val\",\"pref-m2\",\"created-val\"]"),
+       "code=" + str(r9_lms.code) + " out=" + r9_lms.stdout);
+
+r9_ctl = run_frontend(LMCTL_BIN, true, ["--pref", pref_toml, s_parent], 30000);
+record(RESULTS, "run_script child inherits overlay and parent edits via lmctl script",
+       r9_ctl.code == 0 && contains(r9_ctl.stdout, "CHILD:[\"parent-val\",\"pref-m2\",\"created-val\"]"),
+       "code=" + str(r9_ctl.code) + " out=" + r9_ctl.stdout);
+
+same(RESULTS, "child inheritance frontend parity", r9_lms.stdout, r9_ctl.stdout);
+
+# ============================================================================
+# Section 10: Dry-run and default preflight read the same overlay
+# ============================================================================
+
+s_dry = root + "/s_dry.lms";
+write_file(s_dry, "println(\"DRY_VAL:\" + PROPS.Provider1.Model2 + \":\" + PROPS.Custom.new_property);\n");
+
+r10_lms = run_frontend(LMSCRIPT_BIN, false, ["--dry-run", "--pref", pref_toml, s_dry], 30000);
+record(RESULTS, "--dry-run reads overlay values via lmscript",
+       r10_lms.code == 0 && contains(r10_lms.stdout, "PLAN complete") &&
+       contains(r10_lms.stdout, "DRY_VAL:pref-m2:created-val"),
+       "code=" + str(r10_lms.code) + " out=" + r10_lms.stdout);
+
+r10_ctl = run_frontend(LMCTL_BIN, true, ["--dry-run", "--pref", pref_toml, s_dry], 30000);
+record(RESULTS, "--dry-run reads overlay values via lmctl script",
+       r10_ctl.code == 0 && contains(r10_ctl.stdout, "PLAN complete") &&
+       contains(r10_ctl.stdout, "DRY_VAL:pref-m2:created-val"),
+       "code=" + str(r10_ctl.code) + " out=" + r10_ctl.stdout);
+
+same(RESULTS, "dry-run frontend parity", r10_lms.stdout, r10_ctl.stdout);
+
+# ============================================================================
+# Section 11: -e and stdin forms
+# ============================================================================
+
+# -e form
+r11_e_lms = run_frontend(LMSCRIPT_BIN, false, ["--pref", pref_toml, "-e", "println(\"EVAL:\" + PROPS.Custom.new_property);"], 30000);
+record(RESULTS, "-e form reads overlay via lmscript",
+       r11_e_lms.code == 0 && contains(r11_e_lms.stdout, "EVAL:created-val"),
+       "code=" + str(r11_e_lms.code) + " out=" + r11_e_lms.stdout);
+
+r11_e_ctl = run_frontend(LMCTL_BIN, true, ["--pref", pref_toml, "-e", "println(\"EVAL:\" + PROPS.Custom.new_property);"], 30000);
+record(RESULTS, "-e form reads overlay via lmctl script",
+       r11_e_ctl.code == 0 && contains(r11_e_ctl.stdout, "EVAL:created-val"),
+       "code=" + str(r11_e_ctl.code) + " out=" + r11_e_ctl.stdout);
+
+same(RESULTS, "-e form frontend parity", r11_e_lms.stdout, r11_e_ctl.stdout);
+
+# stdin form using -
+cmd_stdin_lms = "cat " + s_add + " | env HOME=" + home_dir + " LMCTL_HOME=" + profile_dir + " LMCTL_DB=" + root + "/state.db NO_COLOR=1 " + LMSCRIPT_BIN + " --pref " + pref_toml + " -";
+r11_in_lms = system(["sh", "-c", cmd_stdin_lms], 30000);
+record(RESULTS, "stdin form (-) reads overlay via lmscript",
+       r11_in_lms.code == 0 && contains(r11_in_lms.stdout, "HAS:true,VAL:created-val"),
+       "code=" + str(r11_in_lms.code) + " out=" + r11_in_lms.stdout);
+
+cmd_stdin_ctl = "cat " + s_add + " | env HOME=" + home_dir + " LMCTL_HOME=" + profile_dir + " LMCTL_DB=" + root + "/state.db NO_COLOR=1 " + LMCTL_BIN + " script --pref " + pref_toml + " -";
+r11_in_ctl = system(["sh", "-c", cmd_stdin_ctl], 30000);
+record(RESULTS, "stdin form (-) reads overlay via lmctl script",
+       r11_in_ctl.code == 0 && contains(r11_in_ctl.stdout, "HAS:true,VAL:created-val"),
+       "code=" + str(r11_in_ctl.code) + " out=" + r11_in_ctl.stdout);
+
+same(RESULTS, "stdin form frontend parity", r11_in_lms.stdout, r11_in_ctl.stdout);
+
+# ============================================================================
+# Section 12: Base file is never written
+# ============================================================================
+
+final_base_content = read_file(base_init);
+mtime_final_cmd = system(["node", "-e", "const fs = require('fs'); process.stdout.write(String(fs.statSync(" + json_stringify(base_init) + ").mtimeMs));"], 30000);
+final_mtime = trim(mtime_final_cmd.stdout);
+
+record(RESULTS, "base init.toml content is completely unchanged",
+       final_base_content == base_content,
+       "len_before=" + str(len(base_content)) + " len_after=" + str(len(final_base_content)));
+
+record(RESULTS, "base init.toml mtime is unchanged",
+       final_mtime == initial_mtime,
+       "mtime_before=" + initial_mtime + " mtime_after=" + final_mtime);
+
+# ============================================================================
+# Section 13: Negative control for failure detection
+# ============================================================================
+
+if (env("FAULT_PREF_OVERLAY", "0") == "1") {
+  record(RESULTS, "negative control: deliberate injected failure", false, "injected fault");
+}
+
+# Cleanup scratch suite directory
+system(["rm", "-rf", root], 30000);
+
+diff = summary(RESULTS);
+if (diff > 0) {
+  lm_exit(1);
+}

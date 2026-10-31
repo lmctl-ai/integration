@@ -1,0 +1,49 @@
+import "lib.lms";
+RESULTS = [];
+TEST_ROOT = env("LMCTL_TEST_ROOT", trim(str(get(system(["pwd"], 30000), "stdout", ""))));
+HELPER = env("HEARTBEAT_FIXTURE", TEST_ROOT + "/tests/prompt-heartbeat-fixture.py");
+
+fn fixture(mode) {
+  result = system(["python3", HELPER, mode], 120000);
+  assert(result.code == 0, "heartbeat fixture transport failed: " + trim(result.stderr));
+  return json_parse(result.stdout);
+}
+
+if (contains(args, "--negative-control")) {
+  control=system(["node","-e","process.exit(0)"],30000);
+  record(RESULTS, "negative control is routed through the checker", control.code==9, "deliberately wrong exit expectation");
+  print("1 assertions: 0 pass, 1 fail");
+  lm_exit(1);
+}
+
+agent = fixture("agent");
+agent_err = agent.result.stderr;
+record(RESULTS,"agent stderr uses a real PTY",agent.result.stderr_is_pty,"not a tty");
+record(RESULTS, "agent delayed turn completes", agent.result.code == 0 && agent.result.timed_out == false, json_stringify(agent.result));
+record(RESULTS, "agent response is exact", agent.result.stdout == "HEARTBEAT_OK\n", agent.result.stdout);
+# HB01: known candidate product failure; the stall timer repeats every threshold.
+stalls=len(split(agent_err,"no assistant output or tool activity"))-1;
+record(RESULTS, "HB01 agent stall notice fires once", stalls==1, "observed="+str(stalls)+" expected=1");
+record(RESULTS, "agent has no elapsed heartbeat line", !contains(agent_err, "still running") && !contains(agent_err, "elapsed"), agent_err);
+
+pty_case = fixture("pty");
+pty_output = pty_case.result.output;
+record(RESULTS, "human PTY turn completes", pty_case.result.code == 0 && pty_case.result.timed_out == false, json_stringify(pty_case.result));
+record(RESULTS, "human PTY response is exact", contains(pty_output, "HEARTBEAT_OK"), pty_output);
+record(RESULTS, "human PTY heartbeat appears", contains(pty_output, "turn still running"), pty_output);
+clears=split(pty_output,from_char_code(13,27)+"[K");
+record(RESULTS, "human PTY heartbeat is cleared", len(clears)>=3&&contains(clears[len(clears)-1],"HEARTBEAT_OK")&&!contains(clears[len(clears)-1],"turn still running"),pty_output);
+
+for(evidence in [agent,pty_case]){
+  record(RESULTS,"usage command exit and stderr",evidence.usage.code==0&&evidence.usage.stderr=="",json_stringify(evidence.usage));
+  usage=json_parse(evidence.usage.stdout);
+  record(RESULTS,"one stored usage row",usage.total.turns==1&&len(usage.groups)==1&&usage.groups[0].key=="heartbeat-session",evidence.usage.stdout);
+  messages=get(evidence.store.sessions,"heartbeat-session",null).messages;
+  record(RESULTS,"one provider prompt and exact answer",len(messages)==2&&messages[1].content=="HEARTBEAT_OK",json_stringify(messages));
+}
+diff = summary(RESULTS);
+passed = 0;
+for (result in RESULTS) { if (result.ok) { passed = passed + 1; } }
+print(str(len(RESULTS)) + " assertions: " + str(passed) + " pass, " + str(len(RESULTS) - passed) + " fail");
+if (diff > 0) { lm_exit(1); }
+lm_exit(0);

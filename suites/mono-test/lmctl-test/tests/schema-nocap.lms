@@ -1,0 +1,192 @@
+# tests/schema-nocap.lms -- Integration tests for NO output cap on schema/CLI-tool calls
+#
+# Covers schema/CLI-tool process execution without output-size limit:
+# - fake tool on an isolated PATH publishing cli.schema.v1 via --schema
+# - tool prints >10 MiB (11,375,000 bytes = 175,000 lines * 65 bytes)
+# - multi-line result (175,000 lines)
+# - full stdout returned in result map, byte-exact
+# - length assertion: length equals tool's known output length (11,375,000)
+# - contrast control: if a 10 MiB cap were active, systemAsync would fail with ERR_OUTPUT_LIMIT
+# - frontend parity: both lmscript and lmctl script return identical results
+# - negative control for failure-detection harness
+
+import "lib.lms";
+
+RESULTS = [];
+
+LMCTL_BIN = env("LMCTL_BIN", "");
+if (LMCTL_BIN == "") {
+  println("error: set LMCTL_BIN to the lmctl binary under test (no default: the old default path is retired)");
+  lm_exit(2);
+}
+LMSCRIPT_BIN = env("LMSCRIPT_BIN", "");
+if (LMSCRIPT_BIN == "") {
+  println("error: set LMSCRIPT_BIN to the lmscript binary under test (no default: the old default path is retired)");
+  lm_exit(2);
+}
+NODE_BIN = env("NODE_BIN", "node");
+
+root = temp_file() + "-schema-nocap-suite";
+bin_dir = root + "/bin";
+schemas_dir = root + "/schemas";
+system(["mkdir", "-p", bin_dir], 30000);
+system(["mkdir", "-p", schemas_dir], 30000);
+
+schema_file = schemas_dir + "/nocap.cli.schema.v1.json";
+write_file(schema_file, "{\n" +
+"  \"schema\": \"cli.schema.v1\",\n" +
+"  \"tool\": \"nocap\",\n" +
+"  \"version\": \"1.0.0\",\n" +
+"  \"operations\": [\n" +
+"    {\n" +
+"      \"name\": \"stream_big\",\n" +
+"      \"access\": \"read\",\n" +
+"      \"description\": \"Stream multi-megabyte output exceeding 10 MiB\",\n" +
+"      \"params\": []\n" +
+"    }\n" +
+"  ]\n" +
+"}\n");
+
+# Fake tool script that prints 11,375,000 bytes of multiline text (> 10.84 MiB, > 10 MiB cap)
+# 175,000 lines * 65 bytes = 11,375,000 bytes
+tool_src = "#!/usr/bin/env node\n" +
+"const fs = require('node:fs');\n" +
+"const crypto = require('node:crypto');\n" +
+"if (process.argv[2] === '--schema') {\n" +
+"  process.stdout.write(fs.readFileSync(" + json_stringify(schema_file) + ", 'utf8'));\n" +
+"  process.exit(0);\n" +
+"}\n" +
+"const line = '0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF\\n';\n" +
+"const lineCount = 175000;\n" +
+"const buf = Buffer.alloc(lineCount * line.length);\n" +
+"for (let i = 0; i < lineCount; i++) {\n" +
+"  buf.write(line, i * line.length);\n" +
+"}\n" +
+"const text = buf.toString('utf8');\n" +
+"const sha256 = crypto.createHash('sha256').update(text).digest('hex');\n" +
+"const payload = JSON.stringify({\n" +
+"  lines: lineCount,\n" +
+"  byte_len: text.length,\n" +
+"  head: '0123456789ABCDEF0123456789ABCDEF',\n" +
+"  tail: '0123456789ABCDEF\\n',\n" +
+"  sha256: sha256,\n" +
+"  text: text\n" +
+"});\n" +
+"process.stdout.write(payload, () => {\n" +
+"  process.exit(0);\n" +
+"});\n";
+
+tool_bin = bin_dir + "/nocap";
+write_file(tool_bin, tool_src);
+system(["chmod", "+x", tool_bin], 30000);
+
+KNOWN_BYTE_LEN = 11375000;
+KNOWN_LINES = 175000;
+
+fn run_with_nocap(frontend_bin, is_lmctl, extra_args, timeout_ms) {
+  env_args = [
+    "env",
+    "PATH=" + bin_dir + ":" + env("NODE_DIR", "/usr/bin") + ":" + env("PATH", ""),
+    "HOME=" + root + "/home",
+    "LMCTL_HOME=" + root + "/profile",
+    "LMCTL_DB=" + root + "/state.db",
+    "NO_COLOR=1"
+  ];
+  call_args = concat(env_args, [frontend_bin]);
+  if (is_lmctl) {
+    call_args = concat(call_args, ["script"]);
+  }
+  call_args = concat(call_args, extra_args);
+  t = 120000;
+  if (timeout_ms != null && timeout_ms > 0) {
+    t = timeout_ms;
+  }
+  return system(call_args, t);
+}
+
+s_run = root + "/s_run.lms";
+write_file(s_run, "import \"" + schema_file + "\";\n" +
+"r = nocap.stream_big();\n" +
+"println(\"STATUS:\" + r.status);\n" +
+"if (r.status == \"ok\") {\n" +
+"  println(\"LINES:\" + str(r.result.lines));\n" +
+"  println(\"BYTE_LEN:\" + str(r.result.byte_len));\n" +
+"  println(\"TEXT_LEN:\" + str(len(r.result.text)));\n" +
+"  println(\"EXACT:\" + str(len(r.result.text) == 11375000));\n" +
+"  println(\"MULTILINE:\" + str(contains(r.result.text, \"\\n\")));\n" +
+"  println(\"HEAD:\" + str(starts_with(r.result.text, r.result.head)));\n" +
+"  println(\"TAIL:\" + str(ends_with(r.result.text, r.result.tail)));\n" +
+"  println(\"SHA256:\" + r.result.sha256);\n" +
+"} else {\n" +
+"  println(\"ERROR:\" + json_stringify(r.error));\n" +
+"}\n");
+
+# ============================================================================
+# Section 1: Real call with >10 MiB output on LMSCRIPT_BIN
+# ============================================================================
+
+r_lms = run_with_nocap(LMSCRIPT_BIN, false, [s_run], 120000);
+record(RESULTS, "schema call >10 MiB output succeeds via lmscript",
+       r_lms.code == 0 && contains(r_lms.stdout, "STATUS:ok"),
+       "code=" + str(r_lms.code) + " out=" + substring(r_lms.stdout, 0, 300) + " err=" + r_lms.stderr);
+
+record(RESULTS, "schema call returns byte-exact length 11,375,000 via lmscript",
+       contains(r_lms.stdout, "EXACT:true") && contains(r_lms.stdout, "TEXT_LEN:11375000"),
+       "out=" + substring(r_lms.stdout, 0, 300));
+
+record(RESULTS, "schema call returns multiline result with 175,000 lines via lmscript",
+       contains(r_lms.stdout, "MULTILINE:true") && contains(r_lms.stdout, "LINES:175000"),
+       "out=" + substring(r_lms.stdout, 0, 300));
+
+record(RESULTS, "schema call preserves byte-exact head and tail markers via lmscript",
+       contains(r_lms.stdout, "HEAD:true") && contains(r_lms.stdout, "TAIL:true"),
+       "out=" + substring(r_lms.stdout, 0, 300));
+
+# ============================================================================
+# Section 2: Real call with >10 MiB output on LMCTL_BIN
+# ============================================================================
+
+r_ctl = run_with_nocap(LMCTL_BIN, true, [s_run], 120000);
+record(RESULTS, "schema call >10 MiB output succeeds via lmctl script",
+       r_ctl.code == 0 && contains(r_ctl.stdout, "STATUS:ok"),
+       "code=" + str(r_ctl.code) + " out=" + substring(r_ctl.stdout, 0, 300) + " err=" + r_ctl.stderr);
+
+record(RESULTS, "schema call returns byte-exact length 11,375,000 via lmctl script",
+       contains(r_ctl.stdout, "EXACT:true") && contains(r_ctl.stdout, "TEXT_LEN:11375000"),
+       "out=" + substring(r_ctl.stdout, 0, 300));
+
+record(RESULTS, "schema call returns multiline result with 175,000 lines via lmctl script",
+       contains(r_ctl.stdout, "MULTILINE:true") && contains(r_ctl.stdout, "LINES:175000"),
+       "out=" + substring(r_ctl.stdout, 0, 300));
+
+record(RESULTS, "schema call preserves byte-exact head and tail markers via lmctl script",
+       contains(r_ctl.stdout, "HEAD:true") && contains(r_ctl.stdout, "TAIL:true"),
+       "out=" + substring(r_ctl.stdout, 0, 300));
+
+# ============================================================================
+# Section 3: Frontend parity and contrast control
+# ============================================================================
+
+same(RESULTS, "lmscript and lmctl script produce identical output for >10 MiB calls", r_lms.stdout, r_ctl.stdout);
+
+# Contrast control: Assert the length equals the tool's known output length (11,375,000 > 10,485,760 limit)
+# If a 10 MiB cap were active, this assertion would fail because total output would exceed limit and error out
+record(RESULTS, "contrast control: output size exceeds 10 MiB cap and matches known length",
+       contains(r_lms.stdout, "BYTE_LEN:11375000") && contains(r_lms.stdout, "TEXT_LEN:11375000"),
+       "expected " + str(KNOWN_BYTE_LEN) + " bytes (> 10 MiB)");
+
+# ============================================================================
+# Section 4: Negative control for failure detection
+# ============================================================================
+
+if (env("FAULT_SCHEMA_NOCAP", "0") == "1") {
+  record(RESULTS, "negative control: deliberate injected failure", false, "injected fault");
+}
+
+# Cleanup scratch suite directory
+system(["rm", "-rf", root], 30000);
+
+diff = summary(RESULTS);
+if (diff > 0) {
+  lm_exit(1);
+}

@@ -1,0 +1,3 @@
+# The parent pipes this deliberately noisy script to head -c 1.
+i = 0;
+while (i < 10000) { print("epipe-probe"); i = i + 1; }

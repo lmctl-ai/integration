@@ -1,0 +1,48 @@
+# Same source is run by lmctl script and standalone lmscript built-ins.
+teamfile = args[0]; workspace = args[1];
+members_raw = lm_members(teamfile); members_shape = "direct-array"; members = members_raw;
+if (type(members_raw) == "object") {
+  if (get(members_raw, "status", "") != "ok" || type(get(members_raw, "members", null)) != "array") {
+    lm_error("lm_members parity status not ok: " + str(get(members_raw, "error", json_stringify(members_raw))));
+    lm_exit(1);
+  }
+  members_shape = "api-envelope"; members = members_raw.members;
+} else if (type(members_raw) != "array") {
+  lm_error("lm_members unexpected shape: " + json_stringify(members_raw));
+  lm_exit(1);
+}
+
+member_raw = lm_member(teamfile, "Lead"); member_shape = "direct-map"; member = member_raw;
+if (type(member_raw) == "object" && has_key(member_raw, "status")) {
+  if (get(member_raw, "status", "") != "ok" || type(get(member_raw, "member", null)) != "object") {
+    lm_error("lm_member parity status not ok: " + str(get(member_raw, "error", json_stringify(member_raw))));
+    lm_exit(1);
+  }
+  member_shape = "api-envelope"; member = member_raw.member;
+  member = set(member, "isLead", member_raw.isLead);
+  member = set(member, "teamfile", member_raw.teamfile);
+} else if (type(member_raw) != "object") {
+  lm_error("lm_member unexpected shape: " + json_stringify(member_raw));
+  lm_exit(1);
+}
+
+sessions_raw = lm_session_list({provider: "codex", sessiondir: workspace, all: true});
+sessions_shape = "direct-array"; sessions = sessions_raw;
+if (type(sessions_raw) == "object") {
+  if (get(sessions_raw, "status", "") != "ok" || type(get(sessions_raw, "sessions", null)) != "array") {
+    lm_error("lm_session_list parity status not ok: " + str(get(sessions_raw, "error", json_stringify(sessions_raw))));
+    lm_exit(1);
+  }
+  sessions_shape = "api-envelope"; sessions = sessions_raw.sessions;
+} else if (type(sessions_raw) != "array") {
+  lm_error("lm_session_list unexpected shape: " + json_stringify(sessions_raw));
+  lm_exit(1);
+}
+quota = lm_ratelimit_readings({providers: ["__lmctl-test-unknown__"], timeoutSeconds: 1});
+print(json_stringify({
+  shapes: {members: members_shape, member: member_shape, sessions: sessions_shape},
+  members: members,
+  member: member,
+  session_ids: sort(pluck(sessions, "sessionid")),
+  quota: {status: quota.status, error: quota.error, readings: quota.readings}
+}, 0));
