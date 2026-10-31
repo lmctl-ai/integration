@@ -1,0 +1,108 @@
+name: e2e
+
+# Scenarios against PUBLISHED lmctl and lmmock. Runs on push/PR here, nightly, by hand, and as a reusable
+# workflow (uses: lmctl-ai/integration/.github/workflows/e2e.yml@<sha>). Advisory: no release workflow waits for it.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+    inputs:
+      lmctl:
+        description: "lmctl tags, comma separated: latest, staging, X.Y.Z"
+        default: "latest,staging"
+      lmmock:
+        description: "lmmock tags, comma separated: pinned (versions.lock), latest, vX.Y.Z"
+        default: "pinned,latest"
+  workflow_call:
+    inputs:
+      lmctl:
+        type: string
+        default: "latest,staging"
+      lmmock:
+        type: string
+        default: "pinned,latest"
+      integration-ref:
+        description: "ref of lmctl-ai/integration to take scenarios from (a sha when called from another repo)"
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+# New pushes cancel running PR checks, never a scheduled or called run.
+concurrency:
+  group: e2e-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      miniplayer: ${{ steps.plan.outputs.miniplayer }}
+      node: ${{ steps.plan.outputs.node }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: lmctl-ai/integration
+          ref: ${{ inputs.integration-ref || github.sha }}
+      - id: plan
+        env:
+          LMCTL: ${{ inputs.lmctl }}
+          LMMOCK: ${{ inputs.lmmock }}
+        run: bash scripts/plan-matrix.sh
+
+  selftest:
+    name: setup selftest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs: plan
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: lmctl-ai/integration
+          ref: ${{ inputs.integration-ref || github.sha }}
+      - run: bash tests/setup-selftest.sh
+
+  scenarios:
+    name: lmctl ${{ matrix.lmctl }} / lmmock ${{ matrix.lmmock }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: lmctl-ai/integration
+          ref: ${{ inputs.integration-ref || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ needs.plan.outputs.node }}
+      - id: setup
+        uses: ./actions/setup
+        with:
+          lmctl: ${{ matrix.lmctl }}
+          tools: lmmock@${{ matrix.lmmock }}+examples.tar.gz
+          miniplayer: ${{ needs.plan.outputs.miniplayer }}
+      - name: Resolved versions
+        run: |
+          {
+            echo "### Resolved"
+            echo "- lmctl: ${{ steps.setup.outputs.lmctl-version }} (requested ${{ matrix.lmctl }})"
+            echo "- lmmock: $(lmmock --version) (requested ${{ matrix.lmmock }})"
+            echo "- miniplayer commit: ${{ needs.plan.outputs.miniplayer }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          lmctl --version; lmscript --version; lmmock --version
+      - name: T0 ClaudeMock (no network)
+        run: bash scripts/run-scenario.sh scenarios/t0-claudemock
+      - name: T1 lm_prompt through lmmock llm-api
+        run: bash scripts/run-scenario.sh scenarios/t1-lmmock-ai
+      - name: Failing controls
+        run: bash tests/scenario-controls.sh

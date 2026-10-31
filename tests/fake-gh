@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Minimal gh stand-in for tests/setup-selftest.sh: serves releases from $FAKE_RELEASES/<owner__repo>/<tag>/.
+# Supports only: gh release view --repo R --json tagName --jq .tagName ; gh release download TAG --repo R -p P... -D DIR --clobber
+set -euo pipefail
+[ "${1:-}" = release ] || { echo "fake-gh: unsupported: $*" >&2; exit 2; }
+sub=$2; shift 2
+repo=""; tag=""; dir="."; patterns=()
+if [ "$sub" = download ]; then tag=$1; shift; fi
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --repo) repo=$2; shift 2 ;;
+    -p) patterns+=("$2"); shift 2 ;;
+    -D) dir=$2; shift 2 ;;
+    --json|--jq) shift 2 ;;
+    --clobber) shift ;;
+    *) shift ;;
+  esac
+done
+base="$FAKE_RELEASES/${repo/\//__}"
+[ -d "$base" ] || { echo "release not found" >&2; exit 1; }
+if [ "$sub" = view ]; then cat "$base/LATEST"; exit 0; fi
+[ -d "$base/$tag" ] || { echo "release not found: $tag" >&2; exit 1; }
+for p in "${patterns[@]}"; do
+  [ -f "$base/$tag/$p" ] || { echo "no assets match $p" >&2; exit 1; }
+  cp "$base/$tag/$p" "$dir/$p"
+done

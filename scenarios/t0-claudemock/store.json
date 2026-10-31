@@ -1,0 +1,8 @@
+{
+  "scriptContains": {
+    "fail me": { "error": "mock provider exploded" },
+    "empty please": "",
+    "ping": "pong",
+    "slow": { "text": "late", "delayMs": 300 }
+  }
+}

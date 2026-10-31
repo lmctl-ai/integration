@@ -1,0 +1,31 @@
+// T0 scenario: four lm_prompt outcomes through the ClaudeMock provider.
+// The script exits non-zero on the first mismatch of any case; it never treats status "ok" alone as success.
+failed = 0;
+
+function verdict(name, ok, detail) {
+  if (ok) {
+    println("PASS " + name);
+    return 0;
+  }
+  println("FAIL " + name + " :: " + detail);
+  return 1;
+}
+
+ok = lm_prompt("team.lmctl", "Coder", "ping");
+failed = failed + verdict("ok reply", ok.status == "ok" && ok.reply == "pong", "status=" + str(ok.status) + " reply=" + str(ok.reply));
+
+bad = lm_prompt("team.lmctl", "Coder", "please fail me now");
+failed = failed + verdict("scripted error", bad.status != "ok" && contains(str(bad.error), "mock provider exploded"), "status=" + str(bad.status) + " error=" + str(bad.error));
+
+empty = lm_prompt("team.lmctl", "Coder", "empty please");
+// A provider can answer status "ok" with an empty reply; that is a failure the script must see.
+failed = failed + verdict("empty reply is detectable", empty.status == "ok" && str(empty.reply) == "", "status=" + str(empty.status) + " reply=" + str(empty.reply));
+
+slow = lm_prompt("team.lmctl", "Coder", "slow now");
+failed = failed + verdict("delayed reply", slow.status == "ok" && slow.reply == "late", "status=" + str(slow.status) + " reply=" + str(slow.reply));
+
+if (failed > 0) {
+  println("T0 FAILED: " + str(failed) + " case(s)");
+  exit(1);
+}
+println("T0 OK");

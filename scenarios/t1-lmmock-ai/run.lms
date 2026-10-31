@@ -1,0 +1,16 @@
+// T1 scenario: one lm_prompt through miniplayer to lmmock's llm-api server.
+// Success needs status "ok" AND a non-empty reply: an ok status with an empty reply is a failure.
+// The reply wording is not matched. It depends on how lmmock's llm-api handler answers the tools miniplayer
+// offers ("pong" in one local run, "Tool result: ..." in every later one), so the assertion that matters is
+// the one in drive.sh: the mock itself saw a request for model mock-agent.
+r = lm_prompt("team.lmctl", "Worker", "ping");
+println("status=" + str(r.status) + " reply=" + str(r.get("reply", "")) + " error=" + str(r.get("error", "-")));
+if (r.status != "ok") {
+  println("FAIL lm_prompt status");
+  exit(1);
+}
+if (str(r.get("reply", "")) == "") {
+  println("FAIL lm_prompt empty reply");
+  exit(1);
+}
+println("T1 OK");

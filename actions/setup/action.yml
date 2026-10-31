@@ -1,0 +1,56 @@
+name: setup
+description: >-
+  Install published lmctl (npm, private prefix, selectable latest, staging or X.Y.Z) and checksum-verified
+  release assets of lmctl-ai hosts such as lmmock. Touches neither the home directory nor global npm.
+inputs:
+  lmctl:
+    description: latest, staging, X.Y.Z, or none
+    default: latest
+  tools:
+    description: >-
+      Comma separated lmctl-ai release hosts as NAME or NAME@TAG (for example lmmock@v0.1.30,lmgit@latest).
+      Each asset is verified against the release SHA256SUMS before it is installed.
+    default: ""
+  miniplayer:
+    description: Full 40-hex commit of lmctl-ai/miniplayer to build from source (no release exists), or empty
+    default: ""
+  github-token:
+    description: Token for gh release download (public repos need only the default)
+    default: ${{ github.token }}
+outputs:
+  lmctl-version:
+    description: Exact lmctl version that was installed
+    value: ${{ steps.lmctl.outputs.lmctl-version }}
+  bin-dir:
+    description: Directory holding the installed host binaries
+    value: ${{ steps.tools.outputs.bin-dir }}
+runs:
+  using: composite
+  steps:
+    - id: lmctl
+      if: inputs.lmctl != 'none'
+      shell: bash
+      env:
+        LMCTL_TAG: ${{ inputs.lmctl }}
+      run: bash "$GITHUB_ACTION_PATH/install-lmctl.sh" "$LMCTL_TAG"
+    - id: tools
+      shell: bash
+      env:
+        TOOLS: ${{ inputs.tools }}
+        MINIPLAYER: ${{ inputs.miniplayer }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+        bin="${RUNNER_TEMP}/integration-bin"
+        mkdir -p "$bin"
+        echo "bin-dir=$bin" >> "$GITHUB_OUTPUT"
+        export INTEGRATION_BIN="$bin"
+        IFS=',' read -r -a list <<< "$TOOLS"
+        for spec in "${list[@]}"; do
+          spec=$(echo "$spec" | tr -d '[:space:]')
+          [ -n "$spec" ] || continue
+          bash "$GITHUB_ACTION_PATH/fetch-host.sh" "$spec"
+        done
+        if [ -n "$MINIPLAYER" ]; then
+          bash "$GITHUB_ACTION_PATH/install-miniplayer.sh" "$MINIPLAYER"
+        fi
