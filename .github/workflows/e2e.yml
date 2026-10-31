@@ -12,7 +12,7 @@ on:
     inputs:
       lmctl:
         description: "lmctl tags, comma separated: latest, staging, X.Y.Z"
-        default: "latest,staging"
+        default: "pinned,latest,staging"
       lmmock:
         description: "lmmock tags, comma separated: pinned (versions.lock), latest, vX.Y.Z"
         default: "pinned,latest"
@@ -20,7 +20,7 @@ on:
     inputs:
       lmctl:
         type: string
-        default: "latest,staging"
+        default: "pinned,latest,staging"
       lmmock:
         type: string
         default: "pinned,latest"

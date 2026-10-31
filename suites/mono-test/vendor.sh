@@ -6,7 +6,13 @@ here=$(cd "$(dirname "$0")" && pwd)
 src=${1:?usage: vendor.sh PATH_TO_CLONE_OF_lmctl-mono-test}
 [ -d "$src/lmctl-test/tests" ] || { echo "no lmctl-test/tests under $src" >&2; exit 2; }
 sha=$(git -C "$src" rev-parse --short HEAD)
+# run-tests.lms is an integration-owned helper used by failure-detection.mjs;
+# retain it when replacing the upstream-vendored test tree.
+helper_tmp="$(mktemp "${TMPDIR:-/tmp}/mono-test-runner.XXXXXX")"
+cp "$here/lmctl-test/run-tests.lms" "$helper_tmp"
 rm -rf "$here/lmctl-test"; mkdir -p "$here/lmctl-test/tests"
+cp "$helper_tmp" "$here/lmctl-test/run-tests.lms"
+rm -f "$helper_tmp"
 cp "$src/live-config.mjs" "$src/live-config.json" "$here/"
 cp "$src/lmctl-test/VERSION" "$here/lmctl-test/"
 echo '{"type":"module"}' > "$here/lmctl-test/package.json"

@@ -1,0 +1,122 @@
+# run-tests.lms -- run the suite, check the version it targets, and report a readable summary.
+#
+# Operator 2026-09-29: give the test suite a version; it must match the lmctl under test unless
+# --ignore-version. Do not run this for every small change -- update the tests, update VERSION,
+# commit, push, then decide to run.
+#
+#   lmctl script run-tests.lms                    run here
+#   lmctl script run-tests.lms --ignore-version   run anyway against a different lmctl
+#
+# Why the version gate: these tests assert exact output shapes, field names and error text. Run
+# against a different lmctl they produce differences that are neither regressions nor findings, just
+# noise -- and noise is what teaches people to ignore a suite.
+
+# Report-only suites print inventories rather than assertions. They have no summary line and must not
+# be counted as differences, or the runner cries wolf and gets ignored.
+# Static suites make no provider calls and finish in seconds. The live ones make real calls and take
+# minutes, so they are OPT-IN: a default run should be fast enough that people actually run it.
+ASSERTING = ["offline-commands", "new-surface", "read", "prohibitions", "merged-api", "cost-feature-cases", "lmscript-diagnostic-cases", "usage-boundary-cases", "lmscript-language-cases", "native-session", "prompt-heartbeat", "dryrun-preflight", "native-git", "command-literals", "graphql-literal", "recover-resumepoint", "doc-examples", "schema-import", "pref-overlay", "schema-nocap", "live-service-controls"];
+REPORTING = ["mapping", "unpinned", "mapping-inventory"];
+LIVE      = ["prompt", "live", "merged-api-live", "cost-live-cases", "pref-overlay-live"];
+
+ignore_version = contains(args, "--ignore-version");
+with_live      = contains(args, "--live");
+skip_reporting = contains(args, "--asserting-only") || contains(args, "--skip-reporting") || env("LMCTL_TEST_ASSERTING_ONLY", "0") == "1";
+
+# Results are appended to this file as each suite finishes. A long run killed part-way then leaves
+# what it completed instead of nothing -- which is what happened the first time I ran the full set:
+# terminated at 580s with every printed line lost, so a nine-minute run produced no evidence at all.
+TEST_ROOT = env("LMCTL_TEST_ROOT", trim(str(get(system(["pwd"], 30000), "stdout", ""))));
+LMCTL_BIN = env("LMCTL_BIN", "lmctl");
+PROGRESS = TEST_ROOT + "/reports/last-run.txt";
+system(["mkdir", "-p", TEST_ROOT + "/reports"], 30000);
+write_file(PROGRESS, "");
+
+want = trim(read_file(TEST_ROOT + "/VERSION"));
+v = system([LMCTL_BIN, "--version"], 60000);
+got_raw = trim(replace(v.stdout, "lmctl ", ""));
+// Strip +build metadata before comparing. lmctl 0.2.11 started identifying dev builds
+// that have moved past their release tag ("0.2.11+bebbb9d") -- a fix I asked for, because
+// a version string that does not change when the behaviour does had already caused a
+// wrong-flag incident in published docs. But it made this gate fail on every dev checkout,
+// since the gate compares exact strings. Build metadata is not part of version equality
+// (semver says so), and what this gate actually cares about is the RELEASE the suite was
+// written against. A +suffix means "at least this release, plus uncommitted work" -- which
+// is the normal state of a dev box and not a mismatch.
+plus = index_of(got_raw, "+");
+got = got_raw;
+if (plus > 0) { got = substring(got_raw, 0, plus); }
+
+print("suite targets lmctl " + want + "; installed is " + got_raw);
+if (want != got) {
+  if (!ignore_version) {
+    lm_error("version mismatch: suite targets " + want + ", installed lmctl is " + got);
+    lm_error("These tests pin exact output shapes and error text, so a mismatch produces differences");
+    lm_error("that are neither regressions nor findings. Update lmctl, or update VERSION and the");
+    lm_error("tests together, or pass --ignore-version if you know what you are comparing.");
+    lm_exit(2);
+  }
+  print("  --ignore-version: continuing anyway; differences below may be version skew, not findings");
+}
+print("");
+
+# NOTE: helpers use prefixed names deliberately. An assignment inside a function resolves to an
+# existing OUTER binding rather than creating a local, so a helper using `i` silently ends its
+# caller's loop. That produced an "every suite clean" report having run one suite of six. Reported.
+fn sum_of(sum_out) {
+  sum_lines = split(sum_out, "\n");
+  sum_idx = len(sum_lines) - 1;
+  while (sum_idx >= 0) {
+    sum_l = trim(sum_lines[sum_idx]); sum_idx = sum_idx - 1;
+    if (contains(sum_l, " compared:") || contains(sum_l, " assertions:")) { return sum_l; }
+  }
+  return "";
+}
+
+flagged = [];
+suites = ASSERTING;
+if (!skip_reporting) { suites = concat(suites, REPORTING); }
+if (with_live) { suites = concat(suites, LIVE); }
+i = 0;
+while (i < len(suites)) {
+  name = suites[i]; i = i + 1;
+  note = "";
+  if (contains(LIVE, name)) { note = "  (live -- spends provider quota)"; }
+  print("=== " + name + note);
+  r = null;
+  if (name == "offline-commands") { r = system(["node", "tests/offline-commands.mjs"], 1800000); }
+  else if (name == "live-service-controls") { r = system(["node", "tests/live-service-controls.mjs"], 60000); }
+  else if (name == "merged-api") { r = system(["node", "tests/merged-api.mjs"], 1800000); }
+  else if (name == "cost-feature-cases") { r = system([LMCTL_BIN, "script", "tests/cost-feature-cases.lms"], 1800000); }
+  else if (name == "lmscript-diagnostic-cases") { r = system([LMCTL_BIN, "script", "tests/lmscript-diagnostic-cases.lms"], 1800000); }
+  else if (name == "usage-boundary-cases") { r = system(["node", "tests/usage-boundary-cases.mjs"], 1800000); }
+  else if (name == "lmscript-language-cases") { r = system(["node", "tests/lmscript-language-cases.mjs"], 1800000); }
+  else if (name == "cost-live-cases") { r = system(["node", "tests/cost-live-cases.mjs"], 600000); }
+  else if (name == "merged-api-live") { r = system(["node", "tests/merged-api-live.mjs"], 3600000); }
+  else if (name == "pref-overlay-live") { r = system(["node", "tests/pref-overlay-live.mjs"], 600000); }
+  else { r = system([LMCTL_BIN, "script", "tests/" + name + ".lms"], 1800000); }
+  s = sum_of(r.stdout);
+  if (len(s) == 0) {
+    if (contains(REPORTING, name)) { print("    report-only, no assertions"); }
+    else { print("    missing assertion summary"); push(flagged, name + ": missing assertion summary"); }
+  } else {
+    print("    " + s);
+    if (contains(ASSERTING, name) || contains(LIVE, name)) {
+      if (!contains(s, "0 differ") && !contains(s, "0 fail")) { push(flagged, name + ": " + s); }
+    }
+  }
+  if (r.code != 0) { print("    exit=" + str(r.code)); push(flagged, name + ": exit " + str(r.code)); }
+  # Persist as we go, so an interrupted run still has evidence of what completed.
+  append_file(PROGRESS, name + ": " + s + " (exit " + str(r.code) + ")\n");
+}
+
+print("");
+if (!with_live) { print("(static only -- pass --live to include prompt and live, which take minutes)"); }
+print("progress written to " + PROGRESS);
+if (len(flagged) == 0) { print("every asserting suite clean"); lm_exit(0); }
+print(str(len(flagged)) + " suite(s) reported differences:");
+j = 0;
+while (j < len(flagged)) { print("  " + flagged[j]); j = j + 1; }
+print("");
+print("The suite failed. Inspect each flagged assertion, missing summary, and child exit above.");
+lm_exit(1);

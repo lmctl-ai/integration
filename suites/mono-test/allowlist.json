@@ -1,107 +1,37 @@
 [
   {
-    "suite": "offline-commands",
-    "match": "FAIL B1 pinned install",
-    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
-    "owner": "lmcode-team Lead (release pipeline)",
-    "expires": "2026-11-14"
-  },
-  {
-    "suite": "offline-commands",
-    "match": "FAIL B2 pinned cache hit",
-    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
-    "owner": "lmcode-team Lead (release pipeline)",
-    "expires": "2026-11-14"
-  },
-  {
-    "suite": "offline-commands",
-    "match": "FAIL B3 a tampered cached binary",
-    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
-    "owner": "lmcode-team Lead (release pipeline)",
-    "expires": "2026-11-14"
-  },
-  {
-    "suite": "offline-commands",
-    "match": "FAIL B4 SHA-256 mismatch",
-    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
-    "owner": "lmcode-team Lead (release pipeline)",
-    "expires": "2026-11-14"
-  },
-  {
-    "suite": "offline-commands",
-    "match": "FAIL B5 no checksum anywhere",
-    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
-    "owner": "lmcode-team Lead (release pipeline)",
-    "expires": "2026-11-14"
-  },
-  {
-    "suite": "offline-commands",
-    "match": "FAIL B6 @latest",
-    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
-    "owner": "lmcode-team Lead (release pipeline)",
-    "expires": "2026-11-14"
-  },
-  {
-    "suite": "offline-commands",
-    "match": "FAIL B9 rate-limited (403) with a cold cache",
-    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
-    "owner": "lmcode-team Lead (release pipeline)",
-    "expires": "2026-11-14"
-  },
-  {
-    "suite": "offline-commands",
-    "match": "FAIL B8 rate-limited (403) newest-release check",
-    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
-    "owner": "lmcode-team Lead (release pipeline)",
-    "expires": "2026-11-14"
-  },
-  {
-    "suite": "offline-commands",
-    "match": "FAIL B7 @latest within the check TTL",
-    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
-    "owner": "lmcode-team Lead (release pipeline)",
-    "expires": "2026-11-14"
-  },
-  {
-    "suite": "offline-commands",
-    "match": "FAIL C5 --check of the pinned install script",
-    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
-    "owner": "lmcode-team Lead (release pipeline)",
-    "expires": "2026-11-14"
-  },
-  {
-    "suite": "offline-commands",
-    "match": "FAIL C4 --check and --lint of an @latest",
-    "reason": "published lmctl 0.2.448 has no load_schema/_lmcode_/run_lmcode install path (script fails to parse 'load_schema('); it arrives with the first release carrying lmcode consensus slice 4. Skew of the mono-test target (current main) against the published package.",
-    "owner": "lmcode-team Lead (release pipeline)",
-    "expires": "2026-11-14"
-  },
-  {
     "suite": "native-git",
     "match": "real run with import evaluates native-git: evaluated=false",
-    "reason": "the native-git suite reports one differential finding on published 0.2.448 (a real run with import: evaluated=false); mono-test targets current main. Not yet analysed which side is right; the release-pipeline design says native-git is being removed, which would retire the suite.",
-    "owner": "lmcode-team Lead (release pipeline)",
-    "expires": "2026-11-14"
+    "reason": "The native-git test still reports evaluated=false for its real-mode import on published lmctl 0.2.450. Its loader control instruments a standalone dist/native-git.js path derived from LMSCRIPT_BIN, but the npm package bundles native:git inside dist/cli/lmscript.js and ships no standalone module there. The assertion cannot observe module evaluation in the published package; owner lmctl-ai/integration must adapt this control to the npm layout.",
+    "owner": "lmctl-ai/integration (port test owner)",
+    "expires": "2026-11-30"
   },
   {
     "suite": "command-coverage",
     "match": "an advertised command lacks an executing test and an allowlist reason",
-    "reason": "the published CLI advertises status and ratelimit; their executing cases live in read.lms (skip-host: reads the operator's teamfile and live ratelimit readings) and are not ported. The upstream command-coverage-allowlist.json is intentionally not edited.",
-    "owner": "lmcode-team Lead (release pipeline)",
-    "expires": "2026-11-14"
+    "reason": "The coverage check still finds advertised status and ratelimit commands without executing tests in the port. Their upstream cases are in read.lms, classified skip-host because they read the operator teamfile and live quota data; porting them needs host-owned fixture/configuration work. Owner lmctl-ai/integration.",
+    "owner": "lmctl-ai/integration (port test owner)",
+    "expires": "2026-11-30"
   },
   {
     "suite": "miniplayer-mock",
     "match": "does not support session resume",
-    "reason": "skew between the mono-test expectation and miniplayer at the pinned commit dad4589 (versions.lock): session/load without cwd answers 'cwd must be an absolute directory path' instead of 'does not support session resume'. Needs the miniplayer owner or an updated mono-test.",
-    "owner": "lmcode-team Lead (release pipeline)",
-    "expires": "2026-11-14"
+    "reason": "The pinned lmctl-ai/miniplayer commit dad4589945357e961bea8e9d240e9a4a3da0c6f3 returns a cwd validation error for session/load without cwd, while this test expects the older \"does not support session resume\" response. This mismatch remains on lmctl 0.2.450; miniplayer owner or integration test owner must align the contract.",
+    "owner": "lmctl-ai/miniplayer / lmctl-ai/integration",
+    "expires": "2026-11-30"
   },
   {
     "suite": "feature-case-controls",
     "match": "language-git survived",
-    "reason": "the broken-output control of the lmscript-language-cases git case does not reject its mutation on published 0.2.448 (the case locates the shipped modules/git.lms next to the lmscript launcher; the product moved git to native:git). Not analysed which side is stale; later controls of this file do not run after it.",
-    "owner": "lmcode-team Lead (release pipeline)",
-    "expires": "2026-11-14"
+    "reason": "The language-git mutation survives because the control derives modules/git.lms beside LMSCRIPT_BIN; the published npm package 0.2.450 contains no modules/git.lms and bundles native:git inside dist/cli/lmscript.js. Owner lmctl-ai/integration must test the published package layout with a valid mutation seam.",
+    "owner": "lmctl-ai/integration (port test owner)",
+    "expires": "2026-11-30"
+  },
+  {
+    "suite": "miniplayer-tools",
+    "match": "miniplayer tools integration",
+    "reason": "The pinned lmctl-ai/miniplayer commit dad4589945357e961bea8e9d240e9a4a3da0c6f3 completes all five mocked tool calls and receives the fixture final response, but lmctl prompt returns an empty replyText instead of TOOLS_OK. This persists with published lmctl 0.2.450; investigate miniplayer provider result.text propagation and the lmctl miniplayer adapter.",
+    "owner": "lmctl-ai/miniplayer / lmctl-ai/lmctl",
+    "expires": "2026-11-30"
   }
 ]
